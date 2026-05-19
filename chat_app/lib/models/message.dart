@@ -7,6 +7,7 @@ class Message {
   final String text;
   final String image;
   final bool seen;
+  final bool delivered;
   final DateTime createdAt;
   final User? sender;
 
@@ -17,6 +18,7 @@ class Message {
     this.text = '',
     this.image = '',
     this.seen = false,
+    this.delivered = false,
     required this.createdAt,
     this.sender,
   });
@@ -29,6 +31,7 @@ class Message {
       text: json['text'] ?? '',
       image: json['image'] ?? '',
       seen: json['seen'] ?? false,
+      delivered: json['delivered'] ?? false,
       createdAt: json['createdAt'] != null 
           ? DateTime.parse(json['createdAt']) 
           : DateTime.now(),
@@ -46,6 +49,7 @@ class Message {
       'text': text,
       'image': image,
       'seen': seen,
+      'delivered': delivered,
       'createdAt': createdAt.toIso8601String(),
     };
   }

@@ -168,6 +168,16 @@ class ApiService {
     return jsonDecode(response.body);
   }
 
+  static Future<Map<String, dynamic>> clearChat(
+      String token, String chatId) async {
+    final response = await http.delete(
+      Uri.parse('${Constants.baseUrl}/chat/chat/$chatId/clear'),
+      headers: _getHeaders(token),
+    );
+
+    return jsonDecode(response.body);
+  }
+
   // Upload endpoint
   static Future<Map<String, dynamic>> uploadImage(
       String token, String imagePath) async {

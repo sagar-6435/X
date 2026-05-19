@@ -10,6 +10,7 @@ class SocketService {
   Function(String)? onMessagesSeen;
   Function(String, bool)? onUserStatus;
   Function(String, Message)? onNewMessageNotification;
+  Function(String)? onMessageDelivered;
 
   void connect(String token) {
     if (_socket != null && _socket!.connected) return;
@@ -70,6 +71,12 @@ class SocketService {
           data['chatId'],
           Message.fromJson(data['message']),
         );
+      }
+    });
+
+    _socket!.on('message-delivered', (data) {
+      if (onMessageDelivered != null) {
+        onMessageDelivered!(data['messageId']);
       }
     });
   }

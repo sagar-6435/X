@@ -157,7 +157,9 @@ class MessageBubble extends StatelessWidget {
                                   Icon(
                                     message.seen
                                         ? Icons.done_all
-                                        : Icons.done,
+                                        : message.delivered
+                                            ? Icons.done_all
+                                            : Icons.done,
                                     size: 14,
                                     color: message.seen
                                         ? Colors.blue

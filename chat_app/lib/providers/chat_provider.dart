@@ -12,6 +12,7 @@ class ChatProvider with ChangeNotifier {
   List<Message> _messages = [];
   List<User> _users = [];
   Map<String, bool> _typingUsers = {};
+  Map<String, int> _unreadCounts = {};
   bool _isLoadingChats = false;
   bool _isLoadingUsers = false;
   bool _isLoadingMessages = false;
@@ -24,6 +25,8 @@ class ChatProvider with ChangeNotifier {
   bool get isLoading => _isLoadingChats || _isLoadingMessages;
   bool get isLoadingUsers => _isLoadingUsers;
   String? get errorMessage => _errorMessage;
+
+  int unreadCount(String chatId) => _unreadCounts[chatId] ?? 0;
 
   ChatProvider() {
     _setupSocketListeners();
@@ -60,7 +63,29 @@ class ChatProvider with ChangeNotifier {
     _socketService.onNewMessageNotification = (chatId, message) {
       _updateChatLastMessage(
           chatId, message.text.isNotEmpty ? message.text : '[Image]');
+      // Increment local unread count
+      _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
       notifyListeners();
+    };
+
+    // Message delivered to recipient
+    _socketService.onMessageDelivered = (messageId) {
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        final m = _messages[index];
+        _messages[index] = Message(
+          id: m.id,
+          chatId: m.chatId,
+          senderId: m.senderId,
+          text: m.text,
+          image: m.image,
+          seen: m.seen,
+          delivered: true,
+          createdAt: m.createdAt,
+          sender: m.sender,
+        );
+        notifyListeners();
+      }
     };
 
     _socketService.onUserTyping = (userId) {
@@ -82,6 +107,7 @@ class ChatProvider with ChangeNotifier {
                 text: m.text,
                 image: m.image,
                 seen: true,
+                delivered: m.delivered,
                 createdAt: m.createdAt,
                 sender: m.sender,
               ))
@@ -116,6 +142,7 @@ class ChatProvider with ChangeNotifier {
         user: chat.user,
         lastMessage: lastMessage,
         updatedAt: DateTime.now(),
+        unreadCount: chat.unreadCount,
       );
       // Move to top
       final updated = _chats.removeAt(index);
@@ -145,6 +172,10 @@ class ChatProvider with ChangeNotifier {
         _chats = (response['chats'] as List)
             .map((chat) => Chat.fromJson(chat))
             .toList();
+        // Sync unread counts from server
+        for (final chat in _chats) {
+          _unreadCounts[chat.id] = chat.unreadCount;
+        }
       }
     } catch (e) {
       _errorMessage = e.toString();
@@ -262,6 +293,9 @@ class ChatProvider with ChangeNotifier {
     try {
       await ApiService.markMessagesAsSeen(token, chatId);
       _socketService.seenMessage(chatId, userId);
+      // Reset local unread count
+      _unreadCounts[chatId] = 0;
+      notifyListeners();
     } catch (e) {
       print('Error marking as seen: $e');
     }
@@ -275,6 +309,31 @@ class ChatProvider with ChangeNotifier {
       _errorMessage = e.toString();
       notifyListeners();
       return null;
+    }
+  }
+
+  Future<void> clearChat(String token, String chatId) async {
+    try {
+      await ApiService.clearChat(token, chatId);
+      _messages = [];
+      _unreadCounts[chatId] = 0;
+      // Update chat's lastMessage locally
+      final index = _chats.indexWhere((c) => c.id == chatId);
+      if (index >= 0) {
+        final chat = _chats[index];
+        _chats[index] = Chat(
+          id: chat.id,
+          user: chat.user,
+          lastMessage: '',
+          updatedAt: DateTime.now(),
+          unreadCount: 0,
+        );
+      }
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = e.toString();
+      notifyListeners();
+      rethrow;
     }
   }
 

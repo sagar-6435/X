@@ -16,11 +16,15 @@ const getChats = async (req, res) => {
       const otherMember = chat.members.find(
         member => member._id.toString() !== req.user._id.toString()
       );
+      const unreadCount = chat.unreadCount
+        ? (chat.unreadCount.get(req.user._id.toString()) || 0)
+        : 0;
       return {
         _id: chat._id,
         user: otherMember,
         lastMessage: chat.lastMessage,
         updatedAt: chat.updatedAt,
+        unreadCount,
       };
     });
 
@@ -95,7 +99,46 @@ const markMessagesAsSeen = async (req, res) => {
       { seen: true }
     );
 
+    // Reset unread count for this user
+    await Chat.findByIdAndUpdate(chatId, {
+      [`unreadCount.${req.user._id}`]: 0,
+    });
+
     res.json({ message: 'Messages marked as seen' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Clear all messages in a chat
+const clearChat = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+
+    // Verify requester is a member of the chat
+    const chat = await Chat.findOne({
+      _id: chatId,
+      members: req.user._id,
+    });
+
+    if (!chat) {
+      return res.status(403).json({ error: 'Not a member of this chat' });
+    }
+
+    await Message.deleteMany({ chatId });
+
+    // Reset lastMessage and unreadCount for all members
+    const resetUnread = {};
+    chat.members.forEach(memberId => {
+      resetUnread[`unreadCount.${memberId}`] = 0;
+    });
+
+    await Chat.findByIdAndUpdate(chatId, {
+      lastMessage: '',
+      ...resetUnread,
+    });
+
+    res.json({ message: 'Chat cleared' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -120,4 +163,5 @@ module.exports = {
   getMessages,
   markMessagesAsSeen,
   getAllUsers,
+  clearChat,
 };

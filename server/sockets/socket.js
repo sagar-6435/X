@@ -36,14 +36,42 @@ const setupSocket = (io) => {
           text: text || '',
           image: image || '',
           seen: false,
+          delivered: false,
         });
         await message.save();
 
-        // Update chat last message
-        await Chat.findByIdAndUpdate(chatId, {
-          lastMessage: text || '[Image]',
-          updatedAt: new Date(),
-        });
+        // Find recipient before any async work
+        const chat = await Chat.findById(chatId);
+        let recipientId = null;
+        let recipientSocketId = null;
+        if (chat) {
+          recipientId = chat.members.find(
+            (m) => m.toString() !== senderId
+          );
+          if (recipientId) {
+            recipientSocketId = onlineUsers.get(recipientId.toString());
+          }
+        }
+
+        // Mark as delivered if recipient is online
+        if (recipientSocketId) {
+          message.delivered = true;
+          await message.save();
+        }
+
+        // Increment unread count for recipient
+        if (recipientId) {
+          await Chat.findByIdAndUpdate(chatId, {
+            lastMessage: text || '[Image]',
+            updatedAt: new Date(),
+            $inc: { [`unreadCount.${recipientId}`]: 1 },
+          });
+        } else {
+          await Chat.findByIdAndUpdate(chatId, {
+            lastMessage: text || '[Image]',
+            updatedAt: new Date(),
+          });
+        }
 
         // Populate sender info
         await message.populate('senderId', 'name profilePic');
@@ -51,22 +79,22 @@ const setupSocket = (io) => {
         // Emit to ALL in room (including sender so optimistic msg gets real _id)
         io.to(chatId).emit('receive-message', message);
 
-        // Also emit to recipient's personal socket if they're online but not in room
-        const chat = await Chat.findById(chatId);
-        if (chat) {
-          const recipientId = chat.members.find(
-            (m) => m.toString() !== senderId
-          );
-          if (recipientId) {
-            const recipientSocketId = onlineUsers.get(recipientId.toString());
-            if (recipientSocketId) {
-              // Notify recipient's chat list to refresh
-              io.to(recipientSocketId).emit('new-message-notification', {
-                chatId,
-                message,
-              });
-            }
+        // Notify sender that message was delivered (if recipient is online)
+        if (recipientSocketId) {
+          const senderSocketId = onlineUsers.get(senderId);
+          if (senderSocketId) {
+            io.to(senderSocketId).emit('message-delivered', {
+              messageId: message._id.toString(),
+            });
           }
+        }
+
+        // Also emit to recipient's personal socket if they're online but not in room
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit('new-message-notification', {
+            chatId,
+            message,
+          });
         }
       } catch (error) {
         console.error('Error sending message:', error);

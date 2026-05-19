@@ -185,8 +185,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Widget _buildChatTile(Chat chat) {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, _) {
+    return Consumer2<AuthProvider, ChatProvider>(
+      builder: (context, authProvider, chatProvider, _) {
+        final unread = chatProvider.unreadCount(chat.id);
         return GestureDetector(
           onTap: () async {
             await Navigator.push(
@@ -230,6 +231,29 @@ class _ChatListScreenState extends State<ChatListScreen> {
                               style: TextStyle(
                                   color: Color(Constants.secondaryTextColor),
                                   fontSize: 11)),
+                          if (unread > 0) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.all(5),
+                              decoration: const BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              constraints: const BoxConstraints(
+                                minWidth: 20,
+                                minHeight: 20,
+                              ),
+                              child: Text(
+                                unread > 99 ? '99+' : '$unread',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 4),
