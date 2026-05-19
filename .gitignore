@@ -1,0 +1,29 @@
+# ── Server ──────────────────────────────
+server/node_modules/
+server/.env
+server/uploads/
+server/*.log
+
+# ── Flutter ──────────────────────────────
+chat_app/.dart_tool/
+chat_app/.flutter-plugins
+chat_app/.flutter-plugins-dependencies
+chat_app/.packages
+chat_app/build/
+chat_app/.idea/
+chat_app/*.iml
+chat_app/android/.gradle/
+chat_app/android/app/.gradle/
+chat_app/android/local.properties
+chat_app/android/key.properties
+chat_app/ios/.symlinks/
+chat_app/ios/Pods/
+chat_app/ios/Flutter/Flutter.framework
+chat_app/ios/Flutter/Flutter.podspec
+chat_app/ios/Runner.xcworkspace/
+chat_app/pubspec.lock
+
+# ── General ──────────────────────────────
+.DS_Store
+Thumbs.db
+*.log

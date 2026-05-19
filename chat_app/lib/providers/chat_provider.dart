@@ -1,0 +1,215 @@
+import 'package:flutter/foundation.dart';
+import '../models/chat.dart';
+import '../models/message.dart';
+import '../models/user.dart';
+import '../services/api_service.dart';
+import '../services/socket_service.dart';
+
+class ChatProvider with ChangeNotifier {
+  final SocketService _socketService = SocketService();
+  
+  List<Chat> _chats = [];
+  List<Message> _messages = [];
+  List<User> _users = [];
+  Map<String, bool> _typingUsers = {};
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  List<Chat> get chats => _chats;
+  List<Message> get messages => _messages;
+  List<User> get users => _users;
+  Map<String, bool> get typingUsers => _typingUsers;
+  bool get isLoading => _isLoading;
+  String? get errorMessage => _errorMessage;
+
+  ChatProvider() {
+    _setupSocketListeners();
+  }
+
+  void _setupSocketListeners() {
+    _socketService.onMessageReceived = (message) {
+      _messages.add(message);
+      notifyListeners();
+    };
+
+    _socketService.onUserTyping = (userId) {
+      _typingUsers[userId] = true;
+      notifyListeners();
+    };
+
+    _socketService.onUserStopTyping = (userId) {
+      _typingUsers.remove(userId);
+      notifyListeners();
+    };
+
+    _socketService.onMessagesSeen = (chatId) {
+      _messages = _messages
+          .map((m) => Message(
+                id: m.id,
+                chatId: m.chatId,
+                senderId: m.senderId,
+                text: m.text,
+                image: m.image,
+                seen: true,
+                createdAt: m.createdAt,
+                sender: m.sender,
+              ))
+          .toList();
+      notifyListeners();
+    };
+  }
+
+  void connectSocket(String token) {
+    _socketService.connect(token);
+  }
+
+  void disconnectSocket() {
+    _socketService.disconnect();
+  }
+
+  Future<void> loadChats(String token) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await ApiService.getChats(token);
+      
+      if (response['chats'] != null) {
+        _chats = (response['chats'] as List)
+            .map((chat) => Chat.fromJson(chat))
+            .toList();
+      }
+      
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadMessages(String token, String chatId) async {
+    _isLoading = true;
+    _errorMessage = null;
+    _messages = [];
+    notifyListeners();
+
+    try {
+      final response = await ApiService.getMessages(token, chatId);
+      
+      if (response['messages'] != null) {
+        _messages = (response['messages'] as List)
+            .map((message) => Message.fromJson(message))
+            .toList();
+      }
+      
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadUsers(String token) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final response = await ApiService.getAllUsers(token);
+      
+      if (response['users'] != null) {
+        _users = (response['users'] as List)
+            .map((user) => User.fromJson(user))
+            .toList();
+      }
+      
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<Chat?> getOrCreateChat(String token, String userId) async {
+    try {
+      final response = await ApiService.getOrCreateChat(token, userId);
+      
+      if (response['chat'] != null) {
+        final chat = Chat.fromJson(response['chat']);
+        
+        // Update or add to chats list
+        final index = _chats.indexWhere((c) => c.id == chat.id);
+        if (index >= 0) {
+          _chats[index] = chat;
+        } else {
+          _chats.insert(0, chat);
+        }
+        
+        notifyListeners();
+        return chat;
+      }
+    } catch (e) {
+      _errorMessage = e.toString();
+      notifyListeners();
+    }
+    return null;
+  }
+
+  void joinChat(String userId, String chatId) {
+    _socketService.joinChat(userId, chatId);
+  }
+
+  void sendMessage({
+    required String chatId,
+    required String senderId,
+    String text = '',
+    String image = '',
+  }) {
+    _socketService.sendMessage(
+      chatId: chatId,
+      senderId: senderId,
+      text: text,
+      image: image,
+    );
+  }
+
+  void sendTyping(String chatId, String userId) {
+    _socketService.typing(chatId, userId);
+  }
+
+  void stopTyping(String chatId, String userId) {
+    _socketService.stopTyping(chatId, userId);
+  }
+
+  Future<void> markAsSeen(String token, String chatId, String userId) async {
+    try {
+      await ApiService.markMessagesAsSeen(token, chatId);
+      _socketService.seenMessage(chatId, userId);
+    } catch (e) {
+      print('Error marking as seen: $e');
+    }
+  }
+
+  Future<String?> uploadImage(String token, String imagePath) async {
+    try {
+      final response = await ApiService.uploadImage(token, imagePath);
+      return response['imageUrl'];
+    } catch (e) {
+      _errorMessage = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
+  void clearMessages() {
+    _messages = [];
+    notifyListeners();
+  }
+}
