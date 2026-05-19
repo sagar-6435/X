@@ -1,47 +1,45 @@
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
 const User = require('../models/User');
-const admin = require('../config/firebase');
 
-// Store online users
+// userId -> socketId
 const onlineUsers = new Map();
 
 const setupSocket = (io) => {
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    // Join chat room
-    socket.on('join-chat', async ({ userId, chatId }) => {
-      try {
-        socket.join(chatId);
-        onlineUsers.set(userId, socket.id);
-        
-        // Update user online status
-        await User.findByIdAndUpdate(userId, { online: true });
-        
-        // Notify others in the chat
-        socket.to(chatId).emit('user-online', { userId });
-      } catch (error) {
-        console.error('Error joining chat:', error);
-      }
+    // User comes online — register them globally
+    socket.on('user-online', async ({ userId }) => {
+      onlineUsers.set(userId, socket.id);
+      await User.findByIdAndUpdate(userId, { online: true });
+      socket.broadcast.emit('user-status', { userId, online: true });
     });
 
-    // Send message
+    // Join a specific chat room
+    socket.on('join-chat', async ({ userId, chatId }) => {
+      socket.join(chatId);
+      onlineUsers.set(userId, socket.id);
+      await User.findByIdAndUpdate(userId, { online: true });
+      socket.to(chatId).emit('user-online', { userId });
+    });
+
+    // Send message — always saved to DB regardless of recipient online status
     socket.on('send-message', async (data) => {
       try {
         const { chatId, senderId, text, image } = data;
 
-        // Create new message
+        // Save to DB — this is the source of truth for history
         const message = new Message({
           chatId,
           senderId,
-          text,
-          image,
+          text: text || '',
+          image: image || '',
           seen: false,
         });
         await message.save();
 
-        // Update chat's last message
+        // Update chat last message
         await Chat.findByIdAndUpdate(chatId, {
           lastMessage: text || '[Image]',
           updatedAt: new Date(),
@@ -50,35 +48,32 @@ const setupSocket = (io) => {
         // Populate sender info
         await message.populate('senderId', 'name profilePic');
 
-        // Send to all OTHER users in the chat (sender already has it optimistically)
-        socket.to(chatId).emit('receive-message', message);
+        // Emit to ALL in room (including sender so optimistic msg gets real _id)
+        io.to(chatId).emit('receive-message', message);
 
-        // Send push notification to offline users
-        const chat = await Chat.findById(chatId).populate('members');
-        const recipient = chat.members.find(
-          (m) => m._id.toString() !== senderId
-        );
-
-        if (recipient && !recipient.online && recipient.fcmToken) {
-          const sender = await User.findById(senderId);
-          await admin.messaging().send({
-            token: recipient.fcmToken,
-            notification: {
-              title: sender.name,
-              body: text || 'Sent an image',
-            },
-            data: {
-              chatId: chatId.toString(),
-              type: 'message',
-            },
-          });
+        // Also emit to recipient's personal socket if they're online but not in room
+        const chat = await Chat.findById(chatId);
+        if (chat) {
+          const recipientId = chat.members.find(
+            (m) => m.toString() !== senderId
+          );
+          if (recipientId) {
+            const recipientSocketId = onlineUsers.get(recipientId.toString());
+            if (recipientSocketId) {
+              // Notify recipient's chat list to refresh
+              io.to(recipientSocketId).emit('new-message-notification', {
+                chatId,
+                message,
+              });
+            }
+          }
         }
       } catch (error) {
         console.error('Error sending message:', error);
       }
     });
 
-    // Typing indicator
+    // Typing indicators
     socket.on('typing', ({ chatId, userId }) => {
       socket.to(chatId).emit('user-typing', { userId });
     });
@@ -87,18 +82,13 @@ const setupSocket = (io) => {
       socket.to(chatId).emit('user-stop-typing', { userId });
     });
 
-    // Mark message as seen
+    // Mark messages as seen
     socket.on('seen-message', async ({ chatId, userId }) => {
       try {
         await Message.updateMany(
-          {
-            chatId,
-            senderId: { $ne: userId },
-            seen: false,
-          },
+          { chatId, senderId: { $ne: userId }, seen: false },
           { seen: true }
         );
-
         io.to(chatId).emit('messages-seen', { chatId, userId });
       } catch (error) {
         console.error('Error marking messages as seen:', error);
@@ -108,22 +98,14 @@ const setupSocket = (io) => {
     // Disconnect
     socket.on('disconnect', async () => {
       try {
-        // Find and remove user from online users
         for (const [userId, socketId] of onlineUsers.entries()) {
           if (socketId === socket.id) {
             onlineUsers.delete(userId);
-            
-            // Update user offline status
             await User.findByIdAndUpdate(userId, {
               online: false,
               lastSeen: new Date(),
             });
-            
-            // Notify all chats the user is in
-            const chats = await Chat.find({ members: userId });
-            chats.forEach((chat) => {
-              io.to(chat._id.toString()).emit('user-offline', { userId });
-            });
+            socket.broadcast.emit('user-status', { userId, online: false });
             break;
           }
         }

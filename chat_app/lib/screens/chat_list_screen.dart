@@ -24,17 +24,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Future<void> _loadData() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    
-    if (authProvider.token != null) {
-      chatProvider.connectSocket(authProvider.token!);
+
+    if (authProvider.token != null && authProvider.user != null) {
+      chatProvider.connectSocket(authProvider.token!, authProvider.user!.id);
       await chatProvider.loadChats(authProvider.token!);
     }
   }
 
+  // Don't disconnect socket on dispose — keep it alive for the session
   @override
   void dispose() {
-    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    chatProvider.disconnectSocket();
     super.dispose();
   }
 

@@ -41,12 +41,14 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   Future<void> _loadMessages() async {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final chatProvider = Provider.of<ChatProvider>(context, listen: false);
-    
-    await chatProvider.loadMessages(authProvider.token!, widget.chat.id);
+
+    // Join socket room first so no messages are missed during load
     chatProvider.joinChat(widget.currentUserId, widget.chat.id);
-    
+
+    await chatProvider.loadMessages(authProvider.token!, widget.chat.id);
+
     _scrollToBottom();
-    
+
     // Mark messages as seen
     await chatProvider.markAsSeen(
       authProvider.token!,

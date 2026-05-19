@@ -28,15 +28,36 @@ class ChatProvider with ChangeNotifier {
   }
 
   void _setupSocketListeners() {
-    // Incoming message from socket (sent by anyone in the room)
+    // Incoming message from socket — reconcile with optimistic or add new
     _socketService.onMessageReceived = (message) {
-      // Avoid duplicates — message may already be added optimistically
-      final exists = _messages.any((m) => m.id == message.id);
-      if (!exists) {
+      // Replace optimistic message (matched by sender + approximate time) with real one
+      final optimisticIndex = _messages.indexWhere((m) =>
+          m.senderId == message.senderId &&
+          m.chatId == message.chatId &&
+          m.text == message.text &&
+          m.image == message.image &&
+          message.createdAt.difference(m.createdAt).inSeconds.abs() < 10 &&
+          !m.id.contains('-')); // real IDs from server don't contain '-'
+
+      // Also check by real ID to avoid duplicates
+      final existsById = _messages.any((m) => m.id == message.id);
+
+      if (existsById) return; // already have it
+
+      if (optimisticIndex >= 0) {
+        _messages[optimisticIndex] = message; // replace optimistic with real
+      } else {
         _messages.add(message);
       }
-      // Update last message in chat list
-      _updateChatLastMessage(message.chatId, message.text.isNotEmpty ? message.text : '[Image]');
+      _updateChatLastMessage(
+          message.chatId, message.text.isNotEmpty ? message.text : '[Image]');
+      notifyListeners();
+    };
+
+    // Recipient gets notified of new message even if not in the chat room
+    _socketService.onNewMessageNotification = (chatId, message) {
+      _updateChatLastMessage(
+          chatId, message.text.isNotEmpty ? message.text : '[Image]');
       notifyListeners();
     };
 
@@ -65,6 +86,23 @@ class ChatProvider with ChangeNotifier {
           .toList();
       notifyListeners();
     };
+
+    _socketService.onUserStatus = (userId, online) {
+      // Update online status in users list
+      _users = _users
+          .map((u) => u.id == userId
+              ? User(
+                  id: u.id,
+                  name: u.name,
+                  email: u.email,
+                  profilePic: u.profilePic,
+                  online: online,
+                  lastSeen: u.lastSeen,
+                )
+              : u)
+          .toList();
+      notifyListeners();
+    };
   }
 
   void _updateChatLastMessage(String chatId, String lastMessage) {
@@ -83,8 +121,12 @@ class ChatProvider with ChangeNotifier {
     }
   }
 
-  void connectSocket(String token) {
+  void connectSocket(String token, String userId) {
     _socketService.connect(token);
+    // Register user as online globally
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _socketService.setUserOnline(userId);
+    });
   }
 
   void disconnectSocket() {
