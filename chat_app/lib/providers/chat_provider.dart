@@ -280,7 +280,6 @@ class ChatProvider with ChangeNotifier {
 
   void clearMessages() {
     _messages = [];
-    _currentChatId = null;
     notifyListeners();
   }
 }
