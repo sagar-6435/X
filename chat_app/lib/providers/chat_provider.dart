@@ -12,15 +12,17 @@ class ChatProvider with ChangeNotifier {
   List<Message> _messages = [];
   List<User> _users = [];
   Map<String, bool> _typingUsers = {};
-  bool _isLoading = false;
+  bool _isLoadingChats = false;
+  bool _isLoadingUsers = false;
+  bool _isLoadingMessages = false;
   String? _errorMessage;
-  String? _currentChatId;
 
   List<Chat> get chats => _chats;
   List<Message> get messages => _messages;
   List<User> get users => _users;
   Map<String, bool> get typingUsers => _typingUsers;
-  bool get isLoading => _isLoading;
+  bool get isLoading => _isLoadingChats || _isLoadingMessages;
+  bool get isLoadingUsers => _isLoadingUsers;
   String? get errorMessage => _errorMessage;
 
   ChatProvider() {
@@ -134,72 +136,59 @@ class ChatProvider with ChangeNotifier {
   }
 
   Future<void> loadChats(String token) async {
-    _isLoading = true;
+    _isLoadingChats = true;
     _errorMessage = null;
     notifyListeners();
-
     try {
       final response = await ApiService.getChats(token);
-
       if (response['chats'] != null) {
         _chats = (response['chats'] as List)
             .map((chat) => Chat.fromJson(chat))
             .toList();
       }
-
-      _isLoading = false;
-      notifyListeners();
     } catch (e) {
       _errorMessage = e.toString();
-      _isLoading = false;
+    } finally {
+      _isLoadingChats = false;
       notifyListeners();
     }
   }
 
   Future<void> loadMessages(String token, String chatId) async {
-    _isLoading = true;
+    _isLoadingMessages = true;
     _errorMessage = null;
     _messages = [];
-    _currentChatId = chatId;
     notifyListeners();
-
     try {
       final response = await ApiService.getMessages(token, chatId);
-
       if (response['messages'] != null) {
         _messages = (response['messages'] as List)
             .map((message) => Message.fromJson(message))
             .toList();
       }
-
-      _isLoading = false;
-      notifyListeners();
     } catch (e) {
       _errorMessage = e.toString();
-      _isLoading = false;
+    } finally {
+      _isLoadingMessages = false;
       notifyListeners();
     }
   }
 
   Future<void> loadUsers(String token) async {
-    _isLoading = true;
+    _isLoadingUsers = true;
     _errorMessage = null;
     notifyListeners();
-
     try {
       final response = await ApiService.getAllUsers(token);
-
       if (response['users'] != null) {
         _users = (response['users'] as List)
             .map((user) => User.fromJson(user))
             .toList();
       }
-
-      _isLoading = false;
-      notifyListeners();
     } catch (e) {
       _errorMessage = e.toString();
-      _isLoading = false;
+    } finally {
+      _isLoadingUsers = false;
       notifyListeners();
     }
   }

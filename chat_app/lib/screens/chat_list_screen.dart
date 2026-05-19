@@ -255,9 +255,31 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget _buildPeopleTab() {
     return Consumer<ChatProvider>(
       builder: (context, chatProvider, _) {
-        if (chatProvider.users.isEmpty) {
+        if (chatProvider.isLoadingUsers) {
           return const Center(
             child: CircularProgressIndicator(color: Color(Constants.primaryColor)),
+          );
+        }
+
+        if (chatProvider.users.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.people_outline,
+                    size: 80, color: Color(Constants.secondaryTextColor)),
+                const SizedBox(height: 16),
+                Text('No users found',
+                    style: TextStyle(
+                        fontSize: 18,
+                        color: Color(Constants.secondaryTextColor))),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  onPressed: _loadData,
+                  child: const Text('Refresh'),
+                ),
+              ],
+            ),
           );
         }
 
