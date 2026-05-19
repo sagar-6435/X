@@ -1,6 +1,6 @@
 class Constants {
-  static const String baseUrl = 'http://192.168.55.101:5000/api';
-  static const String socketUrl = 'http://192.168.55.101:5000';
+  static const String baseUrl = 'https://x-wkay.onrender.com/api';
+  static const String socketUrl = 'https://x-wkay.onrender.com';
   
   // Storage keys
   static const String tokenKey = 'auth_token';

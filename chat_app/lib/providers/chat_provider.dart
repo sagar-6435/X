@@ -7,13 +7,14 @@ import '../services/socket_service.dart';
 
 class ChatProvider with ChangeNotifier {
   final SocketService _socketService = SocketService();
-  
+
   List<Chat> _chats = [];
   List<Message> _messages = [];
   List<User> _users = [];
   Map<String, bool> _typingUsers = {};
   bool _isLoading = false;
   String? _errorMessage;
+  String? _currentChatId;
 
   List<Chat> get chats => _chats;
   List<Message> get messages => _messages;
@@ -27,8 +28,15 @@ class ChatProvider with ChangeNotifier {
   }
 
   void _setupSocketListeners() {
+    // Incoming message from socket (sent by anyone in the room)
     _socketService.onMessageReceived = (message) {
-      _messages.add(message);
+      // Avoid duplicates — message may already be added optimistically
+      final exists = _messages.any((m) => m.id == message.id);
+      if (!exists) {
+        _messages.add(message);
+      }
+      // Update last message in chat list
+      _updateChatLastMessage(message.chatId, message.text.isNotEmpty ? message.text : '[Image]');
       notifyListeners();
     };
 
@@ -59,6 +67,22 @@ class ChatProvider with ChangeNotifier {
     };
   }
 
+  void _updateChatLastMessage(String chatId, String lastMessage) {
+    final index = _chats.indexWhere((c) => c.id == chatId);
+    if (index >= 0) {
+      final chat = _chats[index];
+      _chats[index] = Chat(
+        id: chat.id,
+        user: chat.user,
+        lastMessage: lastMessage,
+        updatedAt: DateTime.now(),
+      );
+      // Move to top
+      final updated = _chats.removeAt(index);
+      _chats.insert(0, updated);
+    }
+  }
+
   void connectSocket(String token) {
     _socketService.connect(token);
   }
@@ -74,13 +98,13 @@ class ChatProvider with ChangeNotifier {
 
     try {
       final response = await ApiService.getChats(token);
-      
+
       if (response['chats'] != null) {
         _chats = (response['chats'] as List)
             .map((chat) => Chat.fromJson(chat))
             .toList();
       }
-      
+
       _isLoading = false;
       notifyListeners();
     } catch (e) {
@@ -94,17 +118,18 @@ class ChatProvider with ChangeNotifier {
     _isLoading = true;
     _errorMessage = null;
     _messages = [];
+    _currentChatId = chatId;
     notifyListeners();
 
     try {
       final response = await ApiService.getMessages(token, chatId);
-      
+
       if (response['messages'] != null) {
         _messages = (response['messages'] as List)
             .map((message) => Message.fromJson(message))
             .toList();
       }
-      
+
       _isLoading = false;
       notifyListeners();
     } catch (e) {
@@ -121,13 +146,13 @@ class ChatProvider with ChangeNotifier {
 
     try {
       final response = await ApiService.getAllUsers(token);
-      
+
       if (response['users'] != null) {
         _users = (response['users'] as List)
             .map((user) => User.fromJson(user))
             .toList();
       }
-      
+
       _isLoading = false;
       notifyListeners();
     } catch (e) {
@@ -140,18 +165,17 @@ class ChatProvider with ChangeNotifier {
   Future<Chat?> getOrCreateChat(String token, String userId) async {
     try {
       final response = await ApiService.getOrCreateChat(token, userId);
-      
+
       if (response['chat'] != null) {
         final chat = Chat.fromJson(response['chat']);
-        
-        // Update or add to chats list
+
         final index = _chats.indexWhere((c) => c.id == chat.id);
         if (index >= 0) {
           _chats[index] = chat;
         } else {
           _chats.insert(0, chat);
         }
-        
+
         notifyListeners();
         return chat;
       }
@@ -172,6 +196,21 @@ class ChatProvider with ChangeNotifier {
     String text = '',
     String image = '',
   }) {
+    // Optimistically add message locally so sender sees it immediately
+    final optimisticMessage = Message(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      chatId: chatId,
+      senderId: senderId,
+      text: text,
+      image: image,
+      seen: false,
+      createdAt: DateTime.now(),
+    );
+    _messages.add(optimisticMessage);
+    _updateChatLastMessage(chatId, text.isNotEmpty ? text : '[Image]');
+    notifyListeners();
+
+    // Send via socket — server saves and broadcasts to others
     _socketService.sendMessage(
       chatId: chatId,
       senderId: senderId,
@@ -210,6 +249,7 @@ class ChatProvider with ChangeNotifier {
 
   void clearMessages() {
     _messages = [];
+    _currentChatId = null;
     notifyListeners();
   }
 }

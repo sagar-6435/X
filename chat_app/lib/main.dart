@@ -46,6 +46,12 @@ class AuthWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AuthProvider>(
       builder: (context, authProvider, child) {
+        // Wait until storage check is done
+        if (authProvider.isInitializing) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
         if (authProvider.isAuthenticated) {
           return const ChatListScreen();
         } else {

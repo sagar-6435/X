@@ -50,8 +50,8 @@ const setupSocket = (io) => {
         // Populate sender info
         await message.populate('senderId', 'name profilePic');
 
-        // Send to all users in the chat
-        io.to(chatId).emit('receive-message', message);
+        // Send to all OTHER users in the chat (sender already has it optimistically)
+        socket.to(chatId).emit('receive-message', message);
 
         // Send push notification to offline users
         const chat = await Chat.findById(chatId).populate('members');
