@@ -11,6 +11,10 @@ class SocketService {
   Function(String, bool)? onUserStatus;
   Function(String, Message)? onNewMessageNotification;
   Function(String)? onMessageDelivered;
+  // messageId, deleteType ('me' | 'everyone'), chatId
+  Function(String, String, String)? onMessageDeleted;
+  // messageId, reactions list, chatId
+  Function(String, List<MessageReaction>, String)? onMessageReacted;
 
   void connect(String token) {
     if (_socket != null && _socket!.connected) return;
@@ -79,6 +83,25 @@ class SocketService {
         onMessageDelivered!(data['messageId']);
       }
     });
+
+    _socket!.on('message-deleted', (data) {
+      if (onMessageDeleted != null) {
+        onMessageDeleted!(
+          data['messageId'],
+          data['deleteType'],
+          data['chatId'],
+        );
+      }
+    });
+
+    _socket!.on('message-reacted', (data) {
+      if (onMessageReacted != null) {
+        final reactions = (data['reactions'] as List)
+            .map((r) => MessageReaction.fromJson(Map<String, dynamic>.from(r)))
+            .toList();
+        onMessageReacted!(data['messageId'], reactions, data['chatId']);
+      }
+    });
   }
 
   void setUserOnline(String userId) {
@@ -100,6 +123,34 @@ class SocketService {
       'senderId': senderId,
       'text': text,
       'image': image,
+    });
+  }
+
+  void deleteMessage({
+    required String messageId,
+    required String deleteType,
+    required String userId,
+    required String chatId,
+  }) {
+    _socket?.emit('delete-message', {
+      'messageId': messageId,
+      'deleteType': deleteType,
+      'userId': userId,
+      'chatId': chatId,
+    });
+  }
+
+  void reactMessage({
+    required String messageId,
+    required String userId,
+    required String emoji,
+    required String chatId,
+  }) {
+    _socket?.emit('react-message', {
+      'messageId': messageId,
+      'userId': userId,
+      'emoji': emoji,
+      'chatId': chatId,
     });
   }
 

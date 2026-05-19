@@ -101,6 +101,70 @@ const setupSocket = (io) => {
       }
     });
 
+    // Delete message via socket for real-time sync
+    socket.on('delete-message', async ({ messageId, deleteType, userId, chatId }) => {
+      try {
+        const message = await Message.findById(messageId);
+        if (!message) return;
+
+        if (deleteType === 'everyone') {
+          if (message.senderId.toString() !== userId) return;
+          message.deletedForEveryone = true;
+          message.text = '';
+          message.image = '';
+          await message.save();
+          // Notify everyone in the room
+          io.to(chatId).emit('message-deleted', {
+            messageId,
+            deleteType: 'everyone',
+            chatId,
+          });
+        } else {
+          // Delete for me — no need to broadcast
+          if (!message.deletedFor.map(id => id.toString()).includes(userId)) {
+            message.deletedFor.push(userId);
+            await message.save();
+          }
+        }
+      } catch (error) {
+        console.error('Error deleting message:', error);
+      }
+    });
+
+    // React to a message via socket for real-time sync
+    socket.on('react-message', async ({ messageId, userId, emoji, chatId }) => {
+      try {
+        const message = await Message.findById(messageId);
+        if (!message) return;
+
+        const existingIndex = message.reactions.findIndex(
+          (r) => r.userId.toString() === userId
+        );
+
+        if (existingIndex >= 0) {
+          if (message.reactions[existingIndex].emoji === emoji) {
+            message.reactions.splice(existingIndex, 1);
+          } else {
+            message.reactions[existingIndex].emoji = emoji;
+          }
+        } else {
+          message.reactions.push({ userId, emoji });
+        }
+
+        await message.save();
+        await message.populate('senderId', 'name profilePic');
+
+        // Broadcast updated reactions to everyone in the room
+        io.to(chatId).emit('message-reacted', {
+          messageId,
+          reactions: message.reactions,
+          chatId,
+        });
+      } catch (error) {
+        console.error('Error reacting to message:', error);
+      }
+    });
+
     // Typing indicators
     socket.on('typing', ({ chatId, userId }) => {
       socket.to(chatId).emit('user-typing', { userId });

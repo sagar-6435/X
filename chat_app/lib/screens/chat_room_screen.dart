@@ -26,10 +26,12 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isTyping = false;
   Timer? _typingTimer;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _loadMessages();
   }
 
@@ -37,6 +39,7 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   void dispose() {
     _typingTimer?.cancel();
     _messageController.dispose();
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     // Stop typing on exit
     if (_isTyping) {
@@ -44,6 +47,16 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       chatProvider.stopTyping(widget.chat.id, widget.currentUserId);
     }
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final distanceFromBottom = _scrollController.position.maxScrollExtent -
+        _scrollController.position.pixels;
+    final shouldShow = distanceFromBottom > 120;
+    if (shouldShow != _showScrollToBottom) {
+      setState(() => _showScrollToBottom = shouldShow);
+    }
   }
 
   Future<void> _loadMessages() async {
@@ -69,6 +82,9 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
+        if (_showScrollToBottom) {
+          setState(() => _showScrollToBottom = false);
+        }
       }
     });
   }
@@ -300,34 +316,87 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
                 final isOtherTyping = chatProvider.typingUsers
                     .containsKey(widget.chat.user.id);
 
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  // +1 for typing bubble when other user is typing
-                  itemCount: chatProvider.messages.isEmpty && !isOtherTyping
-                      ? 0
-                      : chatProvider.messages.length + (isOtherTyping ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    // Empty state
-                    if (chatProvider.messages.isEmpty && !isOtherTyping) {
-                      return _emptyState();
-                    }
+                return Stack(
+                  children: [
+                    ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      // +1 for typing bubble when other user is typing
+                      itemCount: chatProvider.messages.isEmpty && !isOtherTyping
+                          ? 0
+                          : chatProvider.messages.length + (isOtherTyping ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        // Empty state
+                        if (chatProvider.messages.isEmpty && !isOtherTyping) {
+                          return _emptyState();
+                        }
 
-                    // Typing bubble at the end
-                    if (isOtherTyping &&
-                        index == chatProvider.messages.length) {
-                      WidgetsBinding.instance.addPostFrameCallback(
-                          (_) => _scrollToBottom());
-                      return _typingBubble();
-                    }
+                        // Typing bubble at the end
+                        if (isOtherTyping &&
+                            index == chatProvider.messages.length) {
+                          WidgetsBinding.instance.addPostFrameCallback(
+                              (_) => _scrollToBottom());
+                          return _typingBubble();
+                        }
 
-                    final message = chatProvider.messages[index];
-                    return MessageBubble(
-                      message: message,
-                      isCurrentUser:
-                          message.senderId == widget.currentUserId,
-                    );
-                  },
+                        final message = chatProvider.messages[index];
+                        return MessageBubble(
+                          message: message,
+                          isCurrentUser:
+                              message.senderId == widget.currentUserId,
+                          currentUserId: widget.currentUserId,
+                          chatId: widget.chat.id,
+                          onDelete: (messageId, deleteType) {
+                            chatProvider.deleteMessage(
+                              messageId: messageId,
+                              deleteType: deleteType,
+                              currentUserId: widget.currentUserId,
+                              chatId: widget.chat.id,
+                            );
+                          },
+                          onReact: (messageId, emoji) {
+                            chatProvider.reactToMessage(
+                              messageId: messageId,
+                              currentUserId: widget.currentUserId,
+                              emoji: emoji,
+                              chatId: widget.chat.id,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                    // Scroll-to-bottom arrow
+                    if (_showScrollToBottom)
+                      Positioned(
+                        bottom: 12,
+                        right: 16,
+                        child: GestureDetector(
+                          onTap: _scrollToBottom,
+                          child: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: Color(Constants.surfaceColor),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.15)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.3),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.keyboard_arrow_down,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 );
               },
             ),

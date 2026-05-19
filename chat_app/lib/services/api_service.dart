@@ -178,6 +178,28 @@ class ApiService {
     return jsonDecode(response.body);
   }
 
+  static Future<Map<String, dynamic>> deleteMessage(
+      String token, String messageId, String deleteType) async {
+    final response = await http.delete(
+      Uri.parse('${Constants.baseUrl}/chat/message/$messageId'),
+      headers: _getHeaders(token),
+      body: jsonEncode({'deleteType': deleteType}),
+    );
+
+    return jsonDecode(response.body);
+  }
+
+  static Future<Map<String, dynamic>> reactToMessage(
+      String token, String messageId, String emoji) async {
+    final response = await http.post(
+      Uri.parse('${Constants.baseUrl}/chat/message/$messageId/react'),
+      headers: _getHeaders(token),
+      body: jsonEncode({'emoji': emoji}),
+    );
+
+    return jsonDecode(response.body);
+  }
+
   // Upload endpoint
   static Future<Map<String, dynamic>> uploadImage(
       String token, String imagePath) async {

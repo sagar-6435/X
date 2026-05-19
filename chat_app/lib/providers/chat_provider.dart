@@ -72,18 +72,30 @@ class ChatProvider with ChangeNotifier {
     _socketService.onMessageDelivered = (messageId) {
       final index = _messages.indexWhere((m) => m.id == messageId);
       if (index >= 0) {
-        final m = _messages[index];
-        _messages[index] = Message(
-          id: m.id,
-          chatId: m.chatId,
-          senderId: m.senderId,
-          text: m.text,
-          image: m.image,
-          seen: m.seen,
-          delivered: true,
-          createdAt: m.createdAt,
-          sender: m.sender,
-        );
+        _messages[index] = _messages[index].copyWith(delivered: true);
+        notifyListeners();
+      }
+    };
+
+    _socketService.onMessageDeleted = (messageId, deleteType, chatId) {
+      if (deleteType == 'everyone') {
+        final index = _messages.indexWhere((m) => m.id == messageId);
+        if (index >= 0) {
+          _messages[index] = _messages[index].copyWith(
+            deletedForEveryone: true,
+            text: '',
+            image: '',
+          );
+          notifyListeners();
+        }
+      }
+      // 'me' deletes are handled locally without a broadcast
+    };
+
+    _socketService.onMessageReacted = (messageId, reactions, chatId) {
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        _messages[index] = _messages[index].copyWith(reactions: reactions);
         notifyListeners();
       }
     };
@@ -100,17 +112,7 @@ class ChatProvider with ChangeNotifier {
 
     _socketService.onMessagesSeen = (chatId) {
       _messages = _messages
-          .map((m) => Message(
-                id: m.id,
-                chatId: m.chatId,
-                senderId: m.senderId,
-                text: m.text,
-                image: m.image,
-                seen: true,
-                delivered: m.delivered,
-                createdAt: m.createdAt,
-                sender: m.sender,
-              ))
+          .map((m) => m.copyWith(seen: true))
           .toList();
       notifyListeners();
     };
@@ -340,5 +342,71 @@ class ChatProvider with ChangeNotifier {
   void clearMessages() {
     _messages = [];
     notifyListeners();
+  }
+
+  /// Delete a message.
+  /// [deleteType] is 'me' (hide locally) or 'everyone' (mark deleted for all).
+  void deleteMessage({
+    required String messageId,
+    required String deleteType,
+    required String currentUserId,
+    required String chatId,
+  }) {
+    if (deleteType == 'me') {
+      // Remove from local list immediately — no broadcast needed
+      _messages.removeWhere((m) => m.id == messageId);
+      notifyListeners();
+    } else {
+      // Optimistically mark as deleted for everyone
+      final index = _messages.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        _messages[index] = _messages[index].copyWith(
+          deletedForEveryone: true,
+          text: '',
+          image: '',
+        );
+        notifyListeners();
+      }
+    }
+    // Emit socket event so the other participant is updated in real-time
+    _socketService.deleteMessage(
+      messageId: messageId,
+      deleteType: deleteType,
+      userId: currentUserId,
+      chatId: chatId,
+    );
+  }
+
+  /// Toggle an emoji reaction on a message.
+  void reactToMessage({
+    required String messageId,
+    required String currentUserId,
+    required String emoji,
+    required String chatId,
+  }) {
+    // Optimistic update
+    final index = _messages.indexWhere((m) => m.id == messageId);
+    if (index >= 0) {
+      final existing = List<MessageReaction>.from(_messages[index].reactions);
+      final userIndex = existing.indexWhere((r) => r.userId == currentUserId);
+      if (userIndex >= 0) {
+        if (existing[userIndex].emoji == emoji) {
+          existing.removeAt(userIndex); // toggle off
+        } else {
+          existing[userIndex] = MessageReaction(userId: currentUserId, emoji: emoji);
+        }
+      } else {
+        existing.add(MessageReaction(userId: currentUserId, emoji: emoji));
+      }
+      _messages[index] = _messages[index].copyWith(reactions: existing);
+      notifyListeners();
+    }
+    // Emit socket event
+    _socketService.reactMessage(
+      messageId: messageId,
+      userId: currentUserId,
+      emoji: emoji,
+      chatId: chatId,
+    );
   }
 }

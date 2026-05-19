@@ -70,16 +70,89 @@ const getOrCreateChat = async (req, res) => {
   }
 };
 
-// Get messages for a chat
+// Get messages for a chat (exclude messages deleted for this user)
 const getMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
 
-    const messages = await Message.find({ chatId })
+    const messages = await Message.find({
+      chatId,
+      deletedFor: { $ne: req.user._id },
+    })
       .populate('senderId', 'name profilePic')
       .sort({ createdAt: 1 });
 
     res.json({ messages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Delete a message
+// - deleteType 'me'       → hide locally (add userId to deletedFor)
+// - deleteType 'everyone' → mark deletedForEveryone (sender only)
+const deleteMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { deleteType } = req.body; // 'me' | 'everyone'
+
+    const message = await Message.findById(messageId);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+
+    if (deleteType === 'everyone') {
+      // Only the sender can delete for everyone
+      if (message.senderId.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ error: 'Only the sender can delete for everyone' });
+      }
+      message.deletedForEveryone = true;
+      message.text = '';
+      message.image = '';
+      await message.save();
+      return res.json({ message: 'Message deleted for everyone', data: message });
+    }
+
+    // Delete for me — add to deletedFor if not already present
+    if (!message.deletedFor.includes(req.user._id)) {
+      message.deletedFor.push(req.user._id);
+      await message.save();
+    }
+    return res.json({ message: 'Message deleted for you' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Add or update a reaction on a message
+const reactToMessage = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { emoji } = req.body;
+
+    if (!emoji) return res.status(400).json({ error: 'emoji is required' });
+
+    const message = await Message.findById(messageId);
+    if (!message) return res.status(404).json({ error: 'Message not found' });
+
+    const userId = req.user._id.toString();
+    const existingIndex = message.reactions.findIndex(
+      (r) => r.userId.toString() === userId
+    );
+
+    if (existingIndex >= 0) {
+      if (message.reactions[existingIndex].emoji === emoji) {
+        // Same emoji — toggle off (remove reaction)
+        message.reactions.splice(existingIndex, 1);
+      } else {
+        // Different emoji — update
+        message.reactions[existingIndex].emoji = emoji;
+      }
+    } else {
+      message.reactions.push({ userId: req.user._id, emoji });
+    }
+
+    await message.save();
+    await message.populate('senderId', 'name profilePic');
+    return res.json({ message });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -164,4 +237,6 @@ module.exports = {
   markMessagesAsSeen,
   getAllUsers,
   clearChat,
+  deleteMessage,
+  reactToMessage,
 };

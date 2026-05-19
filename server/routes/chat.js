@@ -8,6 +8,8 @@ const {
   markMessagesAsSeen,
   getAllUsers,
   clearChat,
+  deleteMessage,
+  reactToMessage,
 } = require('../controllers/chatController');
 
 // All routes are protected
@@ -17,5 +19,7 @@ router.get('/messages/:chatId', auth, getMessages);
 router.put('/messages/:chatId/seen', auth, markMessagesAsSeen);
 router.get('/users', auth, getAllUsers);
 router.delete('/chat/:chatId/clear', auth, clearChat);
+router.delete('/message/:messageId', auth, deleteMessage);
+router.post('/message/:messageId/react', auth, reactToMessage);
 
 module.exports = router;
