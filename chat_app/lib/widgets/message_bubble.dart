@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:open_filex/open_filex.dart';
 import '../models/message.dart';
 import '../utils/constants.dart';
 
@@ -21,10 +22,12 @@ class MessageBubble extends StatelessWidget {
     required this.onReact,
   });
 
-  // Quick-pick emojis shown in the reaction bar
   static const _quickEmojis = ['❤️', '😂', '😮', '😢', '👍', '👎'];
 
   void _showOptions(BuildContext context) {
+    // Call messages don't get reactions or delete options
+    if (message.isCall) return;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Color(Constants.surfaceColor),
@@ -36,7 +39,7 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Reaction quick-pick row
+              // Reaction row
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -55,18 +58,19 @@ class MessageBubble extends StatelessWidget {
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: alreadyReacted
-                              ? Color(Constants.primaryColor).withValues(alpha: 0.3)
+                              ? Color(Constants.primaryColor)
+                                  .withValues(alpha: 0.3)
                               : Colors.transparent,
                           borderRadius: BorderRadius.circular(20),
                         ),
-                        child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                        child:
+                            Text(emoji, style: const TextStyle(fontSize: 26)),
                       ),
                     );
                   }).toList(),
                 ),
               ),
               const Divider(color: Colors.white12, height: 1),
-              // Delete for me
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.white70),
                 title: const Text('Delete for me',
@@ -76,11 +80,10 @@ class MessageBubble extends StatelessWidget {
                   onDelete(message.id, 'me');
                 },
               ),
-              // Delete for everyone — only sender can do this
               if (isCurrentUser)
                 ListTile(
-                  leading:
-                      const Icon(Icons.delete_forever, color: Colors.redAccent),
+                  leading: const Icon(Icons.delete_forever,
+                      color: Colors.redAccent),
                   title: const Text('Delete for everyone',
                       style: TextStyle(color: Colors.redAccent)),
                   onTap: () {
@@ -97,9 +100,13 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // If deleted for everyone, show a tombstone bubble
     if (message.deletedForEveryone) {
       return _DeletedBubble(isCurrentUser: isCurrentUser);
+    }
+
+    // Call log — centered, no bubble
+    if (message.isCall) {
+      return _CallLogTile(message: message, isCurrentUser: isCurrentUser);
     }
 
     return Padding(
@@ -116,20 +123,13 @@ class MessageBubble extends StatelessWidget {
                   ? MainAxisAlignment.end
                   : MainAxisAlignment.start,
               children: [
-                if (!isCurrentUser) ...[
-                  const SizedBox(width: 8),
-                ],
+                if (!isCurrentUser) const SizedBox(width: 8),
                 Flexible(
                   child: Container(
                     constraints: BoxConstraints(
                       maxWidth: MediaQuery.of(context).size.width * 0.75,
                     ),
-                    padding: message.isImage
-                        ? const EdgeInsets.all(8)
-                        : const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
+                    padding: _bubblePadding,
                     decoration: BoxDecoration(
                       color: isCurrentUser
                           ? Color(Constants.sentMessageColor)
@@ -152,80 +152,14 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ],
                     ),
-                    child: message.isImage
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: CachedNetworkImage(
-                              imageUrl: message.image,
-                              fit: BoxFit.cover,
-                              placeholder: (context, url) => Container(
-                                height: 200,
-                                width: 200,
-                                color: Color(Constants.cardColor),
-                                child: const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Color(Constants.primaryColor),
-                                  ),
-                                ),
-                              ),
-                              errorWidget: (context, url, error) => Container(
-                                height: 200,
-                                width: 200,
-                                color: Color(Constants.cardColor),
-                                child: const Icon(
-                                  Icons.broken_image,
-                                  color: Color(Constants.secondaryTextColor),
-                                ),
-                              ),
-                            ),
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                message.text,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    _formatTime(message.createdAt),
-                                    style: TextStyle(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.7),
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                  if (isCurrentUser) ...[
-                                    const SizedBox(width: 4),
-                                    Icon(
-                                      message.seen
-                                          ? Icons.done_all
-                                          : message.delivered
-                                              ? Icons.done_all
-                                              : Icons.done,
-                                      size: 14,
-                                      color: message.seen
-                                          ? Colors.blue
-                                          : Colors.white.withValues(alpha: 0.7),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ],
-                          ),
+                    child: _buildContent(context),
                   ),
                 ),
                 if (isCurrentUser) const SizedBox(width: 8),
               ],
             ),
           ),
-          // Reactions row
+          // Reactions
           if (message.reactions.isNotEmpty)
             Padding(
               padding: EdgeInsets.only(
@@ -243,23 +177,371 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  String _formatTime(DateTime dateTime) {
-    final now = DateTime.now();
-    final difference = now.difference(dateTime);
+  EdgeInsets get _bubblePadding {
+    if (message.isImage) return const EdgeInsets.all(6);
+    if (message.isDocument) return const EdgeInsets.all(12);
+    return const EdgeInsets.symmetric(horizontal: 14, vertical: 10);
+  }
 
-    if (difference.inMinutes < 1) {
-      return 'Just now';
-    } else if (difference.inHours < 1) {
-      return '${difference.inMinutes}m';
-    } else if (difference.inDays < 1) {
-      return '${difference.inHours}:${(difference.inMinutes % 60).toString().padLeft(2, '0')}';
-    } else {
-      return '${dateTime.day}/${dateTime.month}';
+  Widget _buildContent(BuildContext context) {
+    if (message.isImage) return _ImageContent(imageUrl: message.image);
+    if (message.isDocument) {
+      return _DocumentContent(
+        fileName: message.fileName,
+        fileSize: message.fileSize,
+        fileExt: message.fileExt,
+        fileUrl: message.fileUrl,
+        isCurrentUser: isCurrentUser,
+        createdAt: message.createdAt,
+      );
     }
+    return _TextContent(
+      text: message.text,
+      isCurrentUser: isCurrentUser,
+      seen: message.seen,
+      delivered: message.delivered,
+      createdAt: message.createdAt,
+    );
+  }
+
+}
+
+// ── Image content ─────────────────────────────────────────────────────────────
+
+class _ImageContent extends StatelessWidget {
+  final String imageUrl;
+  const _ImageContent({required this.imageUrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: CachedNetworkImage(
+        imageUrl: imageUrl,
+        fit: BoxFit.cover,
+        width: 220,
+        placeholder: (_, __) => Container(
+          height: 180,
+          width: 220,
+          color: Color(Constants.cardColor),
+          child: const Center(
+            child: CircularProgressIndicator(
+                color: Color(Constants.primaryColor), strokeWidth: 2),
+          ),
+        ),
+        errorWidget: (_, __, ___) => Container(
+          height: 180,
+          width: 220,
+          color: Color(Constants.cardColor),
+          child: const Icon(Icons.broken_image,
+              color: Color(Constants.secondaryTextColor), size: 40),
+        ),
+      ),
+    );
   }
 }
 
-/// Tombstone shown when a message was deleted for everyone.
+// ── Document content ──────────────────────────────────────────────────────────
+
+class _DocumentContent extends StatelessWidget {
+  final String fileName;
+  final int fileSize;
+  final String fileExt;
+  final String fileUrl;
+  final bool isCurrentUser;
+  final DateTime createdAt;
+
+  const _DocumentContent({
+    required this.fileName,
+    required this.fileSize,
+    required this.fileExt,
+    required this.fileUrl,
+    required this.isCurrentUser,
+    required this.createdAt,
+  });
+
+  IconData get _fileIcon {
+    switch (fileExt.toLowerCase()) {
+      case 'pdf':
+        return Icons.picture_as_pdf_rounded;
+      case 'doc':
+      case 'docx':
+        return Icons.description_rounded;
+      case 'xls':
+      case 'xlsx':
+        return Icons.table_chart_rounded;
+      case 'ppt':
+      case 'pptx':
+        return Icons.slideshow_rounded;
+      case 'zip':
+      case 'rar':
+      case '7z':
+        return Icons.folder_zip_rounded;
+      case 'mp3':
+        return Icons.audio_file_rounded;
+      case 'mp4':
+      case 'mov':
+      case 'avi':
+        return Icons.video_file_rounded;
+      default:
+        return Icons.insert_drive_file_rounded;
+    }
+  }
+
+  Color get _fileColor {
+    switch (fileExt.toLowerCase()) {
+      case 'pdf':
+        return Colors.redAccent;
+      case 'doc':
+      case 'docx':
+        return Colors.blueAccent;
+      case 'xls':
+      case 'xlsx':
+        return Colors.green;
+      case 'ppt':
+      case 'pptx':
+        return Colors.orange;
+      case 'zip':
+      case 'rar':
+      case '7z':
+        return Colors.amber;
+      case 'mp3':
+        return Colors.purple;
+      case 'mp4':
+      case 'mov':
+      case 'avi':
+        return Colors.teal;
+      default:
+        return Colors.blueGrey;
+    }
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  String _formatTime(DateTime dt) {
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => OpenFilex.open(fileUrl),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _fileColor.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(_fileIcon, color: _fileColor, size: 26),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fileName.isNotEmpty ? fileName : 'File',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    Text(
+                      fileExt.toUpperCase(),
+                      style: TextStyle(
+                          color: _fileColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold),
+                    ),
+                    if (fileSize > 0) ...[
+                      Text(' · ',
+                          style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.5),
+                              fontSize: 11)),
+                      Text(
+                        _formatSize(fileSize),
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.6),
+                            fontSize: 11),
+                      ),
+                    ],
+                    const Spacer(),
+                    Text(
+                      _formatTime(createdAt),
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 10),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Text content ──────────────────────────────────────────────────────────────
+
+class _TextContent extends StatelessWidget {
+  final String text;
+  final bool isCurrentUser;
+  final bool seen;
+  final bool delivered;
+  final DateTime createdAt;
+
+  const _TextContent({
+    required this.text,
+    required this.isCurrentUser,
+    required this.seen,
+    required this.delivered,
+    required this.createdAt,
+  });
+
+  String _formatTime(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    if (diff.inDays < 1) {
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    }
+    return '${dt.day}/${dt.month}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(text,
+            style: const TextStyle(color: Colors.white, fontSize: 15)),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _formatTime(createdAt),
+              style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.6), fontSize: 11),
+            ),
+            if (isCurrentUser) ...[
+              const SizedBox(width: 4),
+              Icon(
+                seen
+                    ? Icons.done_all
+                    : delivered
+                        ? Icons.done_all
+                        : Icons.done,
+                size: 14,
+                color: seen
+                    ? Colors.blue
+                    : Colors.white.withValues(alpha: 0.6),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ── Call log tile ─────────────────────────────────────────────────────────────
+
+class _CallLogTile extends StatelessWidget {
+  final Message message;
+  final bool isCurrentUser;
+
+  const _CallLogTile({required this.message, required this.isCurrentUser});
+
+  String _formatDuration(int seconds) {
+    if (seconds == 0) return '';
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    if (m == 0) return '${s}s';
+    return '${m}m ${s}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isVideo = message.callType == 'video_call';
+    final isMissed = message.callStatus == 'missed';
+    final isDeclined = message.callStatus == 'declined';
+    final isEnded = message.callStatus == 'ended';
+
+    Color statusColor;
+    IconData statusIcon;
+    String statusText;
+
+    if (isMissed) {
+      statusColor = Colors.redAccent;
+      statusIcon = isVideo ? Icons.videocam_off : Icons.phone_missed;
+      statusText = isCurrentUser ? 'Missed call' : 'Missed call';
+    } else if (isDeclined) {
+      statusColor = Colors.orange;
+      statusIcon = isVideo ? Icons.videocam_off : Icons.call_end;
+      statusText = 'Declined';
+    } else if (isEnded) {
+      statusColor = Colors.greenAccent;
+      statusIcon = isVideo ? Icons.videocam : Icons.call;
+      final dur = _formatDuration(message.callDuration);
+      statusText = dur.isNotEmpty ? dur : 'Call ended';
+    } else {
+      statusColor = Colors.white54;
+      statusIcon = isVideo ? Icons.videocam : Icons.call;
+      statusText = isVideo ? 'Video call' : 'Voice call';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Color(Constants.surfaceColor).withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(statusIcon, color: statusColor, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                statusText,
+                style: TextStyle(color: statusColor, fontSize: 13),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '${message.createdAt.hour.toString().padLeft(2, '0')}:${message.createdAt.minute.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Deleted bubble ────────────────────────────────────────────────────────────
+
 class _DeletedBubble extends StatelessWidget {
   final bool isCurrentUser;
   const _DeletedBubble({required this.isCurrentUser});
@@ -285,8 +567,7 @@ class _DeletedBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.block,
-                    size: 14,
-                    color: Colors.white.withValues(alpha: 0.4)),
+                    size: 14, color: Colors.white.withValues(alpha: 0.4)),
                 const SizedBox(width: 6),
                 Text(
                   'This message was deleted',
@@ -306,7 +587,8 @@ class _DeletedBubble extends StatelessWidget {
   }
 }
 
-/// Aggregated emoji reaction chips.
+// ── Reactions row ─────────────────────────────────────────────────────────────
+
 class _ReactionsRow extends StatelessWidget {
   final List<MessageReaction> reactions;
   final String currentUserId;
@@ -318,18 +600,15 @@ class _ReactionsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Aggregate: emoji → count
     final Map<String, int> counts = {};
     for (final r in reactions) {
       counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
     }
-
     return Wrap(
       spacing: 4,
       children: counts.entries.map((entry) {
-        final isMine = reactions.any(
-          (r) => r.userId == currentUserId && r.emoji == entry.key,
-        );
+        final isMine = reactions
+            .any((r) => r.userId == currentUserId && r.emoji == entry.key);
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
@@ -344,9 +623,7 @@ class _ReactionsRow extends StatelessWidget {
             ),
           ),
           child: Text(
-            entry.value > 1
-                ? '${entry.key} ${entry.value}'
-                : entry.key,
+            entry.value > 1 ? '${entry.key} ${entry.value}' : entry.key,
             style: const TextStyle(fontSize: 13),
           ),
         );

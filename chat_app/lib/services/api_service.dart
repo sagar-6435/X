@@ -217,4 +217,22 @@ class ApiService {
 
     return jsonDecode(responseBody);
   }
+
+  static Future<Map<String, dynamic>> uploadDocument(
+      String token, String filePath, String fileName) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${Constants.baseUrl}/upload/document'),
+    );
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(
+      await http.MultipartFile.fromPath('document', filePath,
+          filename: fileName),
+    );
+
+    final response = await request.send();
+    final responseBody = await response.stream.bytesToString();
+
+    return jsonDecode(responseBody);
+  }
 }

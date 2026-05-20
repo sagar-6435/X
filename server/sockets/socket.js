@@ -27,101 +27,132 @@ const setupSocket = (io) => {
     // Send message — always saved to DB regardless of recipient online status
     socket.on('send-message', async (data) => {
       try {
-        const { chatId, senderId, text, image } = data;
+        const { chatId, senderId, text, image, fileUrl, fileName, fileSize, fileExt } = data;
 
-        // Save to DB — this is the source of truth for history
         const message = new Message({
           chatId,
           senderId,
           text: text || '',
           image: image || '',
+          fileUrl: fileUrl || '',
+          fileName: fileName || '',
+          fileSize: fileSize || 0,
+          fileExt: fileExt || '',
           seen: false,
           delivered: false,
         });
         await message.save();
 
-        // Find recipient before any async work
         const chat = await Chat.findById(chatId);
         let recipientId = null;
         let recipientSocketId = null;
         if (chat) {
-          recipientId = chat.members.find(
-            (m) => m.toString() !== senderId
-          );
+          recipientId = chat.members.find((m) => m.toString() !== senderId);
           if (recipientId) {
             recipientSocketId = onlineUsers.get(recipientId.toString());
           }
         }
 
-        // Mark as delivered if recipient is online
         if (recipientSocketId) {
           message.delivered = true;
           await message.save();
         }
 
-        // Increment unread count for recipient
+        const lastMsg = text || (image ? '[Image]' : fileName ? `[File] ${fileName}` : '[Message]');
         if (recipientId) {
           await Chat.findByIdAndUpdate(chatId, {
-            lastMessage: text || '[Image]',
+            lastMessage: lastMsg,
             updatedAt: new Date(),
             $inc: { [`unreadCount.${recipientId}`]: 1 },
           });
         } else {
-          await Chat.findByIdAndUpdate(chatId, {
-            lastMessage: text || '[Image]',
-            updatedAt: new Date(),
-          });
+          await Chat.findByIdAndUpdate(chatId, { lastMessage: lastMsg, updatedAt: new Date() });
         }
 
-        // Populate sender info
         await message.populate('senderId', 'name profilePic');
-
-        // Emit to ALL in room (including sender so optimistic msg gets real _id)
         io.to(chatId).emit('receive-message', message);
 
-        // Notify sender that message was delivered (if recipient is online)
         if (recipientSocketId) {
           const senderSocketId = onlineUsers.get(senderId);
           if (senderSocketId) {
-            io.to(senderSocketId).emit('message-delivered', {
-              messageId: message._id.toString(),
-            });
+            io.to(senderSocketId).emit('message-delivered', { messageId: message._id.toString() });
           }
-        }
-
-        // Also emit to recipient's personal socket if they're online but not in room
-        if (recipientSocketId) {
-          io.to(recipientSocketId).emit('new-message-notification', {
-            chatId,
-            message,
-          });
+          io.to(recipientSocketId).emit('new-message-notification', { chatId, message });
         }
       } catch (error) {
         console.error('Error sending message:', error);
       }
     });
 
-    // Delete message via socket for real-time sync
+    // ── WebRTC Signaling ────────────────────────────────────────────────────
+
+    // Caller initiates a call
+    socket.on('call-user', async ({ callerId, calleeId, chatId, callType, offer }) => {
+      const calleeSocketId = onlineUsers.get(calleeId);
+      if (calleeSocketId) {
+        io.to(calleeSocketId).emit('incoming-call', {
+          callerId,
+          chatId,
+          callType,
+          offer,
+        });
+      } else {
+        // Callee offline — save missed call message
+        socket.emit('call-failed', { reason: 'User is offline' });
+        await _saveCallMessage({ chatId, senderId: callerId, callType, callStatus: 'missed' });
+      }
+    });
+
+    // Callee answers
+    socket.on('call-answer', ({ callerId, calleeId, answer }) => {
+      const callerSocketId = onlineUsers.get(callerId);
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('call-answered', { answer });
+      }
+    });
+
+    // ICE candidate exchange
+    socket.on('ice-candidate', ({ targetUserId, candidate }) => {
+      const targetSocketId = onlineUsers.get(targetUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('ice-candidate', { candidate });
+      }
+    });
+
+    // Call declined by callee
+    socket.on('call-declined', async ({ callerId, calleeId, chatId, callType }) => {
+      const callerSocketId = onlineUsers.get(callerId);
+      if (callerSocketId) {
+        io.to(callerSocketId).emit('call-declined');
+      }
+      await _saveCallMessage({ chatId, senderId: callerId, callType, callStatus: 'declined' });
+    });
+
+    // Call ended by either party
+    socket.on('call-ended', async ({ targetUserId, chatId, callType, callDuration, senderId }) => {
+      const targetSocketId = onlineUsers.get(targetUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-ended');
+      }
+      await _saveCallMessage({ chatId, senderId, callType, callStatus: 'ended', callDuration });
+    });
+
+    // ── Message management ──────────────────────────────────────────────────
+
     socket.on('delete-message', async ({ messageId, deleteType, userId, chatId }) => {
       try {
         const message = await Message.findById(messageId);
         if (!message) return;
-
         if (deleteType === 'everyone') {
           if (message.senderId.toString() !== userId) return;
           message.deletedForEveryone = true;
           message.text = '';
           message.image = '';
+          message.fileUrl = '';
           await message.save();
-          // Notify everyone in the room
-          io.to(chatId).emit('message-deleted', {
-            messageId,
-            deleteType: 'everyone',
-            chatId,
-          });
+          io.to(chatId).emit('message-deleted', { messageId, deleteType: 'everyone', chatId });
         } else {
-          // Delete for me — no need to broadcast
-          if (!message.deletedFor.map(id => id.toString()).includes(userId)) {
+          if (!message.deletedFor.map((id) => id.toString()).includes(userId)) {
             message.deletedFor.push(userId);
             await message.save();
           }
@@ -131,16 +162,11 @@ const setupSocket = (io) => {
       }
     });
 
-    // React to a message via socket for real-time sync
     socket.on('react-message', async ({ messageId, userId, emoji, chatId }) => {
       try {
         const message = await Message.findById(messageId);
         if (!message) return;
-
-        const existingIndex = message.reactions.findIndex(
-          (r) => r.userId.toString() === userId
-        );
-
+        const existingIndex = message.reactions.findIndex((r) => r.userId.toString() === userId);
         if (existingIndex >= 0) {
           if (message.reactions[existingIndex].emoji === emoji) {
             message.reactions.splice(existingIndex, 1);
@@ -150,22 +176,14 @@ const setupSocket = (io) => {
         } else {
           message.reactions.push({ userId, emoji });
         }
-
         await message.save();
         await message.populate('senderId', 'name profilePic');
-
-        // Broadcast updated reactions to everyone in the room
-        io.to(chatId).emit('message-reacted', {
-          messageId,
-          reactions: message.reactions,
-          chatId,
-        });
+        io.to(chatId).emit('message-reacted', { messageId, reactions: message.reactions, chatId });
       } catch (error) {
         console.error('Error reacting to message:', error);
       }
     });
 
-    // Typing indicators
     socket.on('typing', ({ chatId, userId }) => {
       socket.to(chatId).emit('user-typing', { userId });
     });
@@ -174,7 +192,6 @@ const setupSocket = (io) => {
       socket.to(chatId).emit('user-stop-typing', { userId });
     });
 
-    // Mark messages as seen
     socket.on('seen-message', async ({ chatId, userId }) => {
       try {
         await Message.updateMany(
@@ -187,16 +204,12 @@ const setupSocket = (io) => {
       }
     });
 
-    // Disconnect
     socket.on('disconnect', async () => {
       try {
         for (const [userId, socketId] of onlineUsers.entries()) {
           if (socketId === socket.id) {
             onlineUsers.delete(userId);
-            await User.findByIdAndUpdate(userId, {
-              online: false,
-              lastSeen: new Date(),
-            });
+            await User.findByIdAndUpdate(userId, { online: false, lastSeen: new Date() });
             socket.broadcast.emit('user-status', { userId, online: false });
             break;
           }
@@ -208,5 +221,22 @@ const setupSocket = (io) => {
     });
   });
 };
+
+async function _saveCallMessage({ chatId, senderId, callType, callStatus, callDuration = 0 }) {
+  try {
+    const message = new Message({
+      chatId,
+      senderId,
+      callType,
+      callStatus,
+      callDuration,
+    });
+    await message.save();
+    const lastMsg = callType === 'video_call' ? '[Video Call]' : '[Voice Call]';
+    await Chat.findByIdAndUpdate(chatId, { lastMessage: lastMsg, updatedAt: new Date() });
+  } catch (e) {
+    console.error('Error saving call message:', e);
+  }
+}
 
 module.exports = setupSocket;

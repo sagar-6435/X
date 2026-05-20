@@ -16,6 +16,12 @@ dependencies:
   socket_io_client: ^2.0.3+1
   cached_network_image: ^3.3.0
   intl: ^0.18.1
+  image_picker: ^1.0.7
+  file_picker: ^8.0.3
+  flutter_webrtc: ^0.10.6
+  permission_handler: ^11.3.1
+  open_filex: ^4.3.4
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:

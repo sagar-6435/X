@@ -6,6 +6,7 @@ import '../models/chat.dart';
 import '../models/user.dart';
 import '../utils/constants.dart';
 import 'chat_room_screen.dart';
+import 'incoming_call_screen.dart';
 
 class ChatListScreen extends StatefulWidget {
   const ChatListScreen({super.key});
@@ -21,6 +22,33 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     _loadData();
+    // Register incoming call handler so calls ring from anywhere in the app
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+      chatProvider.onIncomingCall =
+          (callerId, chatId, callType, offer) {
+        if (!mounted) return;
+        // Find caller name from users list
+        final callerUser = chatProvider.users.firstWhere(
+          (u) => u.id == callerId,
+          orElse: () => User(id: callerId, name: 'Unknown', email: ''),
+        );
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => IncomingCallScreen(
+            callerName: callerUser.name,
+            callerProfilePic: callerUser.profilePic,
+            callerId: callerId,
+            calleeId:
+                Provider.of<AuthProvider>(context, listen: false).user!.id,
+            chatId: chatId,
+            callType: callType,
+            offer: offer,
+          ),
+        );
+      };
+    });
   }
 
   @override
@@ -68,7 +96,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ),
         ),
       );
-      _loadData();
+      // No need to reload — socket keeps chats list up to date in real-time
     }
   }
 
@@ -199,7 +227,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 ),
               ),
             );
-            _loadData();
+            // No need to reload — socket keeps chats list up to date in real-time
           },
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),

@@ -17,6 +17,17 @@ class ChatProvider with ChangeNotifier {
   bool _isLoadingUsers = false;
   bool _isLoadingMessages = false;
   String? _errorMessage;
+  String? _activeChatId;
+
+  // WebRTC call callbacks — set by call screens
+  Function(dynamic answer)? onCallAnswered;
+  Function(dynamic candidate)? onIceCandidate;
+  Function()? onCallDeclined;
+  Function()? onCallEnded;
+
+  // Incoming call callback — set by the root navigator widget
+  Function(String callerId, String chatId, String callType, dynamic offer)?
+      onIncomingCall;
 
   List<Chat> get chats => _chats;
   List<Message> get messages => _messages;
@@ -25,6 +36,7 @@ class ChatProvider with ChangeNotifier {
   bool get isLoading => _isLoadingChats || _isLoadingMessages;
   bool get isLoadingUsers => _isLoadingUsers;
   String? get errorMessage => _errorMessage;
+  String? get activeChatId => _activeChatId;
 
   int unreadCount(String chatId) => _unreadCounts[chatId] ?? 0;
 
@@ -32,43 +44,37 @@ class ChatProvider with ChangeNotifier {
     _setupSocketListeners();
   }
 
+  // ── Socket listeners ────────────────────────────────────────────────────────
+
   void _setupSocketListeners() {
-    // Incoming message from socket — reconcile with optimistic or add new
     _socketService.onMessageReceived = (message) {
-      // Replace optimistic message (matched by sender + approximate time) with real one
+      final existsById = _messages.any((m) => m.id == message.id);
+      if (existsById) return;
+
       final optimisticIndex = _messages.indexWhere((m) =>
           m.senderId == message.senderId &&
           m.chatId == message.chatId &&
           m.text == message.text &&
           m.image == message.image &&
+          m.fileUrl == message.fileUrl &&
           message.createdAt.difference(m.createdAt).inSeconds.abs() < 10 &&
-          !m.id.contains('-')); // real IDs from server don't contain '-'
-
-      // Also check by real ID to avoid duplicates
-      final existsById = _messages.any((m) => m.id == message.id);
-
-      if (existsById) return; // already have it
+          RegExp(r'^\d+$').hasMatch(m.id));
 
       if (optimisticIndex >= 0) {
-        _messages[optimisticIndex] = message; // replace optimistic with real
+        _messages[optimisticIndex] = message;
       } else {
         _messages.add(message);
       }
-      _updateChatLastMessage(
-          message.chatId, message.text.isNotEmpty ? message.text : '[Image]');
+      _updateChatLastMessage(message.chatId, _lastMsgPreview(message));
       notifyListeners();
     };
 
-    // Recipient gets notified of new message even if not in the chat room
     _socketService.onNewMessageNotification = (chatId, message) {
-      _updateChatLastMessage(
-          chatId, message.text.isNotEmpty ? message.text : '[Image]');
-      // Increment local unread count
+      _updateChatLastMessage(chatId, _lastMsgPreview(message));
       _unreadCounts[chatId] = (_unreadCounts[chatId] ?? 0) + 1;
       notifyListeners();
     };
 
-    // Message delivered to recipient
     _socketService.onMessageDelivered = (messageId) {
       final index = _messages.indexWhere((m) => m.id == messageId);
       if (index >= 0) {
@@ -85,11 +91,11 @@ class ChatProvider with ChangeNotifier {
             deletedForEveryone: true,
             text: '',
             image: '',
+            fileUrl: '',
           );
           notifyListeners();
         }
       }
-      // 'me' deletes are handled locally without a broadcast
     };
 
     _socketService.onMessageReacted = (messageId, reactions, chatId) {
@@ -111,14 +117,11 @@ class ChatProvider with ChangeNotifier {
     };
 
     _socketService.onMessagesSeen = (chatId) {
-      _messages = _messages
-          .map((m) => m.copyWith(seen: true))
-          .toList();
+      _messages = _messages.map((m) => m.copyWith(seen: true)).toList();
       notifyListeners();
     };
 
     _socketService.onUserStatus = (userId, online) {
-      // Update online status in users list
       _users = _users
           .map((u) => u.id == userId
               ? User(
@@ -131,8 +134,64 @@ class ChatProvider with ChangeNotifier {
                 )
               : u)
           .toList();
+      _chats = _chats
+          .map((c) => c.user.id == userId
+              ? Chat(
+                  id: c.id,
+                  user: User(
+                    id: c.user.id,
+                    name: c.user.name,
+                    email: c.user.email,
+                    profilePic: c.user.profilePic,
+                    online: online,
+                    lastSeen: c.user.lastSeen,
+                  ),
+                  lastMessage: c.lastMessage,
+                  updatedAt: c.updatedAt,
+                  unreadCount: c.unreadCount,
+                )
+              : c)
+          .toList();
       notifyListeners();
     };
+
+    // WebRTC signaling — forward to whichever call screen is active
+    _socketService.onIncomingCall =
+        (callerId, chatId, callType, offer) {
+      onIncomingCall?.call(callerId, chatId, callType, offer);
+    };
+
+    _socketService.onCallAnswered = (answer) {
+      onCallAnswered?.call(answer);
+    };
+
+    _socketService.onIceCandidate = (candidate) {
+      onIceCandidate?.call(candidate);
+    };
+
+    _socketService.onCallDeclined = () {
+      onCallDeclined?.call();
+    };
+
+    _socketService.onCallEnded = () {
+      onCallEnded?.call();
+    };
+
+    _socketService.onCallFailed = (reason) {
+      // surfaced via onCallDeclined for simplicity
+      onCallDeclined?.call();
+    };
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  String _lastMsgPreview(Message m) {
+    if (m.text.isNotEmpty) return m.text;
+    if (m.image.isNotEmpty) return '📷 Image';
+    if (m.fileUrl.isNotEmpty) return '📎 ${m.fileName.isNotEmpty ? m.fileName : "File"}';
+    if (m.callType == 'voice_call') return '📞 Voice call';
+    if (m.callType == 'video_call') return '🎥 Video call';
+    return '';
   }
 
   void _updateChatLastMessage(String chatId, String lastMessage) {
@@ -146,15 +205,15 @@ class ChatProvider with ChangeNotifier {
         updatedAt: DateTime.now(),
         unreadCount: chat.unreadCount,
       );
-      // Move to top
       final updated = _chats.removeAt(index);
       _chats.insert(0, updated);
     }
   }
 
+  // ── Connection ───────────────────────────────────────────────────────────────
+
   void connectSocket(String token, String userId) {
     _socketService.connect(token);
-    // Register user as online globally
     Future.delayed(const Duration(milliseconds: 500), () {
       _socketService.setUserOnline(userId);
     });
@@ -163,6 +222,8 @@ class ChatProvider with ChangeNotifier {
   void disconnectSocket() {
     _socketService.disconnect();
   }
+
+  // ── Data loading ─────────────────────────────────────────────────────────────
 
   Future<void> loadChats(String token) async {
     _isLoadingChats = true;
@@ -174,7 +235,6 @@ class ChatProvider with ChangeNotifier {
         _chats = (response['chats'] as List)
             .map((chat) => Chat.fromJson(chat))
             .toList();
-        // Sync unread counts from server
         for (final chat in _chats) {
           _unreadCounts[chat.id] = chat.unreadCount;
         }
@@ -188,10 +248,16 @@ class ChatProvider with ChangeNotifier {
   }
 
   Future<void> loadMessages(String token, String chatId) async {
-    _isLoadingMessages = true;
+    if (_activeChatId != chatId) {
+      _messages = [];
+      _activeChatId = chatId;
+    }
+    final firstLoad = _messages.isEmpty;
+    if (firstLoad) {
+      _isLoadingMessages = true;
+      notifyListeners();
+    }
     _errorMessage = null;
-    _messages = [];
-    notifyListeners();
     try {
       final response = await ApiService.getMessages(token, chatId);
       if (response['messages'] != null) {
@@ -229,17 +295,14 @@ class ChatProvider with ChangeNotifier {
   Future<Chat?> getOrCreateChat(String token, String userId) async {
     try {
       final response = await ApiService.getOrCreateChat(token, userId);
-
       if (response['chat'] != null) {
         final chat = Chat.fromJson(response['chat']);
-
         final index = _chats.indexWhere((c) => c.id == chat.id);
         if (index >= 0) {
           _chats[index] = chat;
         } else {
           _chats.insert(0, chat);
         }
-
         notifyListeners();
         return chat;
       }
@@ -250,6 +313,8 @@ class ChatProvider with ChangeNotifier {
     return null;
   }
 
+  // ── Messaging ────────────────────────────────────────────────────────────────
+
   void joinChat(String userId, String chatId) {
     _socketService.joinChat(userId, chatId);
   }
@@ -259,49 +324,58 @@ class ChatProvider with ChangeNotifier {
     required String senderId,
     String text = '',
     String image = '',
+    String fileUrl = '',
+    String fileName = '',
+    int fileSize = 0,
+    String fileExt = '',
   }) {
-    // Optimistically add message locally so sender sees it immediately
     final optimisticMessage = Message(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       chatId: chatId,
       senderId: senderId,
       text: text,
       image: image,
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileExt: fileExt,
       seen: false,
       createdAt: DateTime.now(),
     );
     _messages.add(optimisticMessage);
-    _updateChatLastMessage(chatId, text.isNotEmpty ? text : '[Image]');
+    _updateChatLastMessage(chatId, _lastMsgPreview(optimisticMessage));
     notifyListeners();
 
-    // Send via socket — server saves and broadcasts to others
     _socketService.sendMessage(
       chatId: chatId,
       senderId: senderId,
       text: text,
       image: image,
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileSize: fileSize,
+      fileExt: fileExt,
     );
   }
 
-  void sendTyping(String chatId, String userId) {
-    _socketService.typing(chatId, userId);
-  }
+  void sendTyping(String chatId, String userId) =>
+      _socketService.typing(chatId, userId);
 
-  void stopTyping(String chatId, String userId) {
-    _socketService.stopTyping(chatId, userId);
-  }
+  void stopTyping(String chatId, String userId) =>
+      _socketService.stopTyping(chatId, userId);
 
   Future<void> markAsSeen(String token, String chatId, String userId) async {
     try {
       await ApiService.markMessagesAsSeen(token, chatId);
       _socketService.seenMessage(chatId, userId);
-      // Reset local unread count
       _unreadCounts[chatId] = 0;
       notifyListeners();
     } catch (e) {
-      print('Error marking as seen: $e');
+      debugPrint('Error marking as seen: $e');
     }
   }
+
+  // ── Uploads ──────────────────────────────────────────────────────────────────
 
   Future<String?> uploadImage(String token, String imagePath) async {
     try {
@@ -314,12 +388,26 @@ class ChatProvider with ChangeNotifier {
     }
   }
 
+  Future<Map<String, dynamic>?> uploadDocument(
+      String token, String filePath, String fileName) async {
+    try {
+      final response =
+          await ApiService.uploadDocument(token, filePath, fileName);
+      if (response['fileUrl'] != null) return response;
+    } catch (e) {
+      _errorMessage = e.toString();
+      notifyListeners();
+    }
+    return null;
+  }
+
+  // ── Chat management ──────────────────────────────────────────────────────────
+
   Future<void> clearChat(String token, String chatId) async {
     try {
       await ApiService.clearChat(token, chatId);
       _messages = [];
       _unreadCounts[chatId] = 0;
-      // Update chat's lastMessage locally
       final index = _chats.indexWhere((c) => c.id == chatId);
       if (index >= 0) {
         final chat = _chats[index];
@@ -341,11 +429,10 @@ class ChatProvider with ChangeNotifier {
 
   void clearMessages() {
     _messages = [];
+    _activeChatId = null;
     notifyListeners();
   }
 
-  /// Delete a message.
-  /// [deleteType] is 'me' (hide locally) or 'everyone' (mark deleted for all).
   void deleteMessage({
     required String messageId,
     required String deleteType,
@@ -353,22 +440,20 @@ class ChatProvider with ChangeNotifier {
     required String chatId,
   }) {
     if (deleteType == 'me') {
-      // Remove from local list immediately — no broadcast needed
       _messages.removeWhere((m) => m.id == messageId);
       notifyListeners();
     } else {
-      // Optimistically mark as deleted for everyone
       final index = _messages.indexWhere((m) => m.id == messageId);
       if (index >= 0) {
         _messages[index] = _messages[index].copyWith(
           deletedForEveryone: true,
           text: '',
           image: '',
+          fileUrl: '',
         );
         notifyListeners();
       }
     }
-    // Emit socket event so the other participant is updated in real-time
     _socketService.deleteMessage(
       messageId: messageId,
       deleteType: deleteType,
@@ -377,23 +462,23 @@ class ChatProvider with ChangeNotifier {
     );
   }
 
-  /// Toggle an emoji reaction on a message.
   void reactToMessage({
     required String messageId,
     required String currentUserId,
     required String emoji,
     required String chatId,
   }) {
-    // Optimistic update
     final index = _messages.indexWhere((m) => m.id == messageId);
     if (index >= 0) {
       final existing = List<MessageReaction>.from(_messages[index].reactions);
-      final userIndex = existing.indexWhere((r) => r.userId == currentUserId);
+      final userIndex =
+          existing.indexWhere((r) => r.userId == currentUserId);
       if (userIndex >= 0) {
         if (existing[userIndex].emoji == emoji) {
-          existing.removeAt(userIndex); // toggle off
+          existing.removeAt(userIndex);
         } else {
-          existing[userIndex] = MessageReaction(userId: currentUserId, emoji: emoji);
+          existing[userIndex] =
+              MessageReaction(userId: currentUserId, emoji: emoji);
         }
       } else {
         existing.add(MessageReaction(userId: currentUserId, emoji: emoji));
@@ -401,12 +486,75 @@ class ChatProvider with ChangeNotifier {
       _messages[index] = _messages[index].copyWith(reactions: existing);
       notifyListeners();
     }
-    // Emit socket event
     _socketService.reactMessage(
       messageId: messageId,
       userId: currentUserId,
       emoji: emoji,
       chatId: chatId,
+    );
+  }
+
+  // ── WebRTC call actions ──────────────────────────────────────────────────────
+
+  void initiateCall({
+    required String calleeId,
+    required String chatId,
+    required String callType,
+    required dynamic offer,
+  }) {
+    // callerId is resolved server-side from the socket auth token,
+    // but we still pass it for the callee's incoming-call event.
+    // The provider doesn't store currentUserId, so the screen passes it via
+    // the socket directly.
+    _socketService.callUser(
+      callerId: '', // filled by socket service from auth
+      calleeId: calleeId,
+      chatId: chatId,
+      callType: callType,
+      offer: offer,
+    );
+  }
+
+  void answerCall({required String callerId, required dynamic answer}) {
+    _socketService.answerCall(
+      callerId: callerId,
+      calleeId: '', // server resolves from socket
+      answer: answer,
+    );
+  }
+
+  void sendIceCandidate(
+      {required String targetUserId, required dynamic candidate}) {
+    _socketService.sendIceCandidate(
+        targetUserId: targetUserId, candidate: candidate);
+  }
+
+  void declineCall({
+    required String callerId,
+    required String calleeId,
+    required String chatId,
+    required String callType,
+  }) {
+    _socketService.declineCall(
+      callerId: callerId,
+      calleeId: calleeId,
+      chatId: chatId,
+      callType: callType,
+    );
+  }
+
+  void endCall({
+    required String targetUserId,
+    required String chatId,
+    required String callType,
+    required int callDuration,
+  }) {
+    _socketService.endCall(
+      targetUserId: targetUserId,
+      chatId: chatId,
+      callType: callType,
+      senderId: '',
+      callDuration: callDuration,
     );
   }
 }
