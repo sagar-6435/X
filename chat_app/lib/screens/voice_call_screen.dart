@@ -160,7 +160,6 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
 
   void _toggleSpeaker() {
     setState(() => _isSpeakerOn = !_isSpeakerOn);
-    // flutter_webrtc handles speaker via enableSpeakerphone
     Helper.setSpeakerphoneOn(_isSpeakerOn);
   }
 
