@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const upload = require('../middleware/upload');
+const { imageUpload } = require('../middleware/upload');
 const {
   register,
   login,
@@ -17,7 +17,7 @@ router.post('/login', login);
 
 // Protected routes
 router.get('/me', auth, getCurrentUser);
-router.put('/profile', auth, upload.single('profilePic'), updateProfile);
+router.put('/profile', auth, imageUpload.single('profilePic'), updateProfile);
 router.put('/fcm-token', auth, updateFcmToken);
 router.post('/logout', auth, logout);
 

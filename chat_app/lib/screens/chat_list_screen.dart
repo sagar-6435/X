@@ -21,7 +21,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   void initState() {
     super.initState();
-    _loadData();
+    // Defer all provider calls until after the first frame is built to avoid
+    // calling setState/notifyListeners during the build phase.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadData();
+    });
     // Register incoming call handler so calls ring from anywhere in the app
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final chatProvider = Provider.of<ChatProvider>(context, listen: false);

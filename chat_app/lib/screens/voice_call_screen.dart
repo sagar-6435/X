@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../providers/chat_provider.dart';
 import '../utils/constants.dart';
+import '../utils/permission_service.dart';
 
 class VoiceCallScreen extends StatefulWidget {
   final String userName;
@@ -90,6 +91,12 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
   }
 
   Future<void> _initCall() async {
+    final granted = await PermissionService.requestMicrophone(context);
+    if (!granted) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+
     _localStream = await navigator.mediaDevices
         .getUserMedia({'audio': true, 'video': false});
 

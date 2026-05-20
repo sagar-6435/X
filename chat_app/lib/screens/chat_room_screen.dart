@@ -7,6 +7,7 @@ import '../providers/chat_provider.dart';
 import '../providers/auth_provider.dart';
 import '../models/chat.dart';
 import '../utils/constants.dart';
+import '../utils/permission_service.dart';
 import '../widgets/message_bubble.dart';
 import 'voice_call_screen.dart';
 import 'video_call_screen.dart';
@@ -204,6 +205,12 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
+    // Camera needs camera permission; gallery needs photos permission.
+    final granted = source == ImageSource.camera
+        ? await PermissionService.requestCameraAndMicrophone(context)
+        : await PermissionService.requestPhotos(context);
+    if (!granted || !mounted) return;
+
     try {
       final XFile? file = await _imagePicker.pickImage(
         source: source,
@@ -243,6 +250,9 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
   }
 
   Future<void> _pickDocument() async {
+    final granted = await PermissionService.requestStorage(context);
+    if (!granted || !mounted) return;
+
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
@@ -291,7 +301,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
 
   // ── Calls ────────────────────────────────────────────────────────────────────
 
-  void _startVoiceCall() {
+  void _startVoiceCall() async {
+    final granted = await PermissionService.requestMicrophone(context);
+    if (!granted || !mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -308,7 +321,10 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
-  void _startVideoCall() {
+  void _startVideoCall() async {
+    final granted = await PermissionService.requestCameraAndMicrophone(context);
+    if (!granted || !mounted) return;
+
     Navigator.push(
       context,
       MaterialPageRoute(
