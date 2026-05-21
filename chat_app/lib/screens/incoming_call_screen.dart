@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/auth_provider.dart';
+import '../providers/chat_provider.dart';
 import '../utils/constants.dart';
 import 'voice_call_screen.dart';
 import 'video_call_screen.dart';
@@ -99,7 +102,20 @@ class IncomingCallScreen extends StatelessWidget {
                   Column(
                     children: [
                       GestureDetector(
-                        onTap: () => Navigator.pop(context, false),
+                        onTap: () {
+                          // Notify the caller that the call was declined
+                          final chatProvider =
+                              Provider.of<ChatProvider>(context, listen: false);
+                          final authProvider =
+                              Provider.of<AuthProvider>(context, listen: false);
+                          chatProvider.declineCall(
+                            callerId: callerId,
+                            calleeId: authProvider.user?.id ?? calleeId,
+                            chatId: chatId,
+                            callType: callType,
+                          );
+                          Navigator.pop(context, false);
+                        },
                         child: Container(
                           width: 72,
                           height: 72,

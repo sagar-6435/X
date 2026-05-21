@@ -43,6 +43,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
   bool _callEnded = false;
   int _callSeconds = 0;
   Timer? _callTimer;
+  late ChatProvider _chatProvider; // cached — safe to use in dispose
 
   // Buffer ICE candidates that arrive before remote description is set
   final List<RTCIceCandidate> _pendingCandidates = [];
@@ -58,8 +59,12 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
   @override
   void initState() {
     super.initState();
-    _initCall();
-    _setupCallbacks();
+    _chatProvider = Provider.of<ChatProvider>(context, listen: false);
+    // Wire callbacks BEFORE starting the call so no events are missed
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupCallbacks();
+      _initCall();
+    });
   }
 
   @override
@@ -67,6 +72,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
     _callTimer?.cancel();
     _localStream?.dispose();
     _peerConnection?.close();
+    // Clear callbacks using cached provider — context is invalid here
+    _chatProvider.onCallAnswered = null;
+    _chatProvider.onIceCandidate = null;
+    _chatProvider.onCallDeclined = null;
+    _chatProvider.onCallEnded = null;
     super.dispose();
   }
 
@@ -74,18 +84,17 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
       widget.isCaller ? widget.calleeId : widget.callerId;
 
   void _setupCallbacks() {
-    final provider = Provider.of<ChatProvider>(context, listen: false);
-    provider.onCallAnswered = (answer) async {
+    _chatProvider.onCallAnswered = (answer) async {
       if (_peerConnection == null) return;
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(answer['sdp'], answer['type']),
       );
       _remoteDescriptionSet = true;
       await _drainCandidates();
-      setState(() => _callConnected = true);
+      if (mounted) setState(() => _callConnected = true);
       _startTimer();
     };
-    provider.onIceCandidate = (candidate) async {
+    _chatProvider.onIceCandidate = (candidate) async {
       final c = RTCIceCandidate(
         candidate['candidate'],
         candidate['sdpMid'],
@@ -97,8 +106,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
         _pendingCandidates.add(c);
       }
     };
-    provider.onCallDeclined = () => _handleCallDeclined();
-    provider.onCallEnded = () => _handleRemoteHangup();
+    _chatProvider.onCallDeclined = () => _handleCallDeclined();
+    _chatProvider.onCallEnded = () => _handleRemoteHangup();
   }
 
   Future<void> _drainCandidates() async {
@@ -126,7 +135,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
 
     _peerConnection!.onIceCandidate = (candidate) {
       if (candidate.candidate == null) return;
-      Provider.of<ChatProvider>(context, listen: false).sendIceCandidate(
+      _chatProvider.sendIceCandidate(
         targetUserId: _remoteUserId,
         candidate: {
           'candidate': candidate.candidate,
@@ -137,20 +146,22 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
     };
 
     _peerConnection!.onConnectionState = (state) {
+      // Guard: ignore all state changes once the call has ended or is ending
+      if (_callEnded) return;
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        setState(() => _callConnected = true);
+        if (mounted) setState(() => _callConnected = true);
         _startTimer();
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        // Only end on genuine failure — CLOSED fires on normal dispose, ignore it
         _endCall();
       }
+      // CLOSED fires during dispose — ignored because of _callEnded guard above
     };
 
     if (widget.isCaller) {
       final offer = await _peerConnection!.createOffer({'offerToReceiveAudio': true});
       await _peerConnection!.setLocalDescription(offer);
-      Provider.of<ChatProvider>(context, listen: false).initiateCall(
+      _chatProvider.initiateCall(
         calleeId: widget.calleeId,
         chatId: widget.chatId,
         callType: 'voice_call',
@@ -166,11 +177,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
       await _drainCandidates();
       final answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
-      Provider.of<ChatProvider>(context, listen: false).answerCall(
+      _chatProvider.answerCall(
         callerId: widget.callerId,
         answer: {'sdp': answer.sdp, 'type': answer.type},
       );
-      setState(() => _callConnected = true);
+      if (mounted) setState(() => _callConnected = true);
       _startTimer();
     }
   }
@@ -195,7 +206,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
     if (_callEnded) return;
     setState(() => _callEnded = true);
     _callTimer?.cancel();
-    Provider.of<ChatProvider>(context, listen: false).endCall(
+    _chatProvider.endCall(
       targetUserId: _remoteUserId,
       chatId: widget.chatId,
       callType: 'voice_call',
