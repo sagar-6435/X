@@ -43,6 +43,11 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
   bool _callEnded = false;
   int _callSeconds = 0;
   Timer? _callTimer;
+
+  // Buffer ICE candidates that arrive before remote description is set
+  final List<RTCIceCandidate> _pendingCandidates = [];
+  bool _remoteDescriptionSet = false;
+
   final _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -75,19 +80,32 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
       await _peerConnection!.setRemoteDescription(
         RTCSessionDescription(answer['sdp'], answer['type']),
       );
+      _remoteDescriptionSet = true;
+      await _drainCandidates();
       setState(() => _callConnected = true);
       _startTimer();
     };
     provider.onIceCandidate = (candidate) async {
-      if (_peerConnection == null) return;
-      await _peerConnection!.addCandidate(RTCIceCandidate(
+      final c = RTCIceCandidate(
         candidate['candidate'],
         candidate['sdpMid'],
         candidate['sdpMLineIndex'],
-      ));
+      );
+      if (_remoteDescriptionSet && _peerConnection != null) {
+        await _peerConnection!.addCandidate(c);
+      } else {
+        _pendingCandidates.add(c);
+      }
     };
     provider.onCallDeclined = () => _handleCallDeclined();
     provider.onCallEnded = () => _handleRemoteHangup();
+  }
+
+  Future<void> _drainCandidates() async {
+    for (final c in _pendingCandidates) {
+      await _peerConnection?.addCandidate(c);
+    }
+    _pendingCandidates.clear();
   }
 
   Future<void> _initCall() async {
@@ -124,6 +142,7 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
         _startTimer();
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        // Only end on genuine failure — CLOSED fires on normal dispose, ignore it
         _endCall();
       }
     };
@@ -143,6 +162,8 @@ class _VoiceCallScreenState extends State<VoiceCallScreen> {
         RTCSessionDescription(
             widget.incomingOffer['sdp'], widget.incomingOffer['type']),
       );
+      _remoteDescriptionSet = true;
+      await _drainCandidates();
       final answer = await _peerConnection!.createAnswer();
       await _peerConnection!.setLocalDescription(answer);
       Provider.of<ChatProvider>(context, listen: false).answerCall(
